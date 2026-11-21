@@ -17,6 +17,13 @@ def make_app(**kwargs: Any) -> Any:
         db_backend="memory",
         firebase_url="",
         api_key="",
+        smtp_user="",
+        smtp_password="",
+        alert_emails=(),
+        twilio_account_sid="",
+        twilio_auth_token="",
+        twilio_from="",
+        alert_phones=(),
     )
     return create_app(
         store=MemoryDemoStore(), database=MemoryDB(), settings=settings, **kwargs
@@ -199,6 +206,13 @@ def test_local_settings_reload_switches_database_backend(
         db_backend="memory",
         firebase_url="",
         api_key="",
+        smtp_user="",
+        smtp_password="",
+        alert_emails=(),
+        twilio_account_sid="",
+        twilio_auth_token="",
+        twilio_from="",
+        alert_phones=(),
     )
     app = create_app(database=MemoryDB(), settings=settings)
 

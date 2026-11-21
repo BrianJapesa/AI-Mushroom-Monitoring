@@ -43,3 +43,14 @@ The user narrowed the immediate deliverable to a Kenya-context prototype. Implem
 - Use a small in-process rate limiter rather than adding `flask-limiter`; it avoids another runtime dependency for this single-process Phase 1 service.
 - API key protection covers service routes except `/health` and the dashboard root. Keep `API_KEY` empty only for a local classroom demo; configure a client-owned key before exposing the host to a network.
 - The trained classifier and notification delivery remain unavailable until a reviewed dataset/model and client-owned SMTP/Twilio credentials are configured. Never substitute synthetic model results for farm classifications.
+
+## Alerts, notifications, and reliability phase (2026-11-21)
+
+- Environmental bounds use strict comparisons: exactly 22/26 °C and 80/90% do not alert. Recovery requires the configured margin (humidity-low returns at 82% and temperature-low at 23 °C with the defaults). Hysteresis and cooldown data are persisted at `meta/state`; a single process lock protects updates within this Windows service process.
+- Sensor latest, sensor history, alert, and state changes use one adapter multi-path update. Firebase uses a root update; MemoryDB applies the same operation atomically. The fake Firebase contract tests never contact the live project.
+- Background notification work is bounded and uses up to four workers. Each channel gets four delivery attempts (initial attempt plus three retries); SMTP quota counts successful sends, and messages over the cap wait for one local-day digest. The digest is claimed once per local date to prevent duplicates.
+- SMTP verification authenticates only and sends no message. The admin test route intentionally sends a fixed test message synchronously after API-key authentication; ordinary alert delivery is queued. No mailbox reading code is present.
+- The service entry point uses Waitress on loopback port 5000 on Windows. No external network listener is enabled by default.
+- Retention remains disabled at `RETENTION_DAYS_RECORDS=0`; the manual tool is dry-run unless `--delete-expired` is supplied.
+- One earlier test attempt accidentally constructed the real Twilio client using test-only placeholder configuration; Twilio rejected the request with HTTP 401 and no SMS was sent. The test was changed to disable SMS entirely for that scenario; subsequent full suites use local SMTP/Twilio fakes and the safety gate in `backend/tests/conftest.py`. No further external request is permitted in automated tests.
+- Added `waitress~=3.0.2` because Flask's development server is not appropriate for the Windows production entry point. It was installed only in the repository `.venv` for local validation.

@@ -19,17 +19,29 @@ from backend.mushroom.inference import InferenceService
 from backend.mushroom.routes import _valid_bag_id
 
 
-@pytest.fixture
-def context() -> tuple[object, MemoryDB]:
-    """Create an API client whose writes never reach the configured Firebase."""
-    root = Path(__file__).resolve().parents[2]
+def local_settings(root: Path, **overrides: object) -> Settings:
+    """Load defaults but disable all external providers in test apps."""
     settings = replace(
         Settings.from_env(root / "backend" / ".env", root),
         db_backend="memory",
         firebase_url="",
         api_key="",
-        alert_cooldown_seconds=600,
+        smtp_user="",
+        smtp_password="",
+        alert_emails=(),
+        twilio_account_sid="",
+        twilio_auth_token="",
+        twilio_from="",
+        alert_phones=(),
     )
+    return replace(settings, **overrides)
+
+
+@pytest.fixture
+def context() -> tuple[object, MemoryDB]:
+    """Create an API client whose writes never reach the configured Firebase."""
+    root = Path(__file__).resolve().parents[2]
+    settings = local_settings(root, alert_cooldown_seconds=600)
     database = MemoryDB()
     app = create_app(
         store=MemoryDemoStore(),
@@ -60,7 +72,10 @@ def test_sensor_validates_and_stores_then_raises_and_recovers(
     recovery = client.post("/sensor", json={"temperature": 23.0, "humidity": 85.0})
     assert recovery.status_code == 200
     assert database.get("sensors/latest")["temperature"] == 23.0
-    assert [row["status"] for row in database.query("alerts")] == ["resolved", "open"]
+    assert [row["status"] for row in database.query("alerts")] == [
+        "resolved",
+        "resolved",
+    ]
 
 
 def test_sensor_rejects_out_of_range_and_bad_text(
@@ -131,12 +146,7 @@ def test_records_csv_summary_and_invalid_filters(
 
 def test_health_and_api_key_authentication() -> None:
     root = Path(__file__).resolve().parents[2]
-    settings = replace(
-        Settings.from_env(root / "backend" / ".env", root),
-        db_backend="memory",
-        firebase_url="",
-        api_key="test-api-key-value",
-    )
+    settings = local_settings(root, api_key="test-api-key-value")
     app = create_app(store=MemoryDemoStore(), database=MemoryDB(), settings=settings)
     client = app.test_client()
     assert client.get("/health").json["auth_required"] is True
@@ -150,7 +160,7 @@ def test_health_and_api_key_authentication() -> None:
     )
 
 
-@pytest.mark.parametrize("path", ["a.b", "a$b", "a#b", "a[b", "a]b"])
+@pytest.mark.parametrize("path", ["a.b", "a$b", "a#b", "a[b", "a]b", "a\nb", "a\x7fb"])
 def test_firebase_key_characters_are_rejected(path: str) -> None:
     with pytest.raises(ValueError):
         _parts(path)
@@ -202,12 +212,7 @@ def test_record_filter_bad_room_and_bad_stored_timestamps() -> None:
     from backend.mushroom.routes import _record_filters, _timestamp_or_oldest
 
     root = Path(__file__).resolve().parents[2]
-    settings = replace(
-        Settings.from_env(root / "backend" / ".env", root),
-        db_backend="memory",
-        firebase_url="",
-        api_key="",
-    )
+    settings = local_settings(root)
     app = create_app(store=MemoryDemoStore(), database=MemoryDB(), settings=settings)
     with app.test_request_context("/records?room=%01"):
         assert _record_filters([{"room": "Room 1"}]) == []
@@ -270,12 +275,7 @@ def make_jpeg() -> bytes:
 
 def test_prediction_upload_validation_and_contamination_history() -> None:
     root = Path(__file__).resolve().parents[2]
-    settings = replace(
-        Settings.from_env(root / "backend" / ".env", root),
-        db_backend="memory",
-        firebase_url="",
-        api_key="",
-    )
+    settings = local_settings(root)
     database = MemoryDB()
     model = PredictionStub()
     app = create_app(
@@ -345,12 +345,7 @@ def test_prediction_upload_validation_and_contamination_history() -> None:
 
 def test_unready_model_returns_service_unavailable() -> None:
     root = Path(__file__).resolve().parents[2]
-    settings = replace(
-        Settings.from_env(root / "backend" / ".env", root),
-        db_backend="memory",
-        firebase_url="",
-        api_key="",
-    )
+    settings = local_settings(root)
     app = create_app(store=MemoryDemoStore(), database=MemoryDB(), settings=settings)
     client = app.test_client()
     response = client.post(
@@ -361,13 +356,7 @@ def test_unready_model_returns_service_unavailable() -> None:
 
 def test_predict_rejects_bad_content_and_upload_size() -> None:
     root = Path(__file__).resolve().parents[2]
-    settings = replace(
-        Settings.from_env(root / "backend" / ".env", root),
-        db_backend="memory",
-        firebase_url="",
-        api_key="",
-        max_upload_bytes=2048,
-    )
+    settings = local_settings(root, max_upload_bytes=2048)
     app = create_app(
         store=MemoryDemoStore(),
         database=MemoryDB(),
