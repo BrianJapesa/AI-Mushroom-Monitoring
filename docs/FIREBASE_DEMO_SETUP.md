@@ -31,4 +31,18 @@ The connection script copies the key into ignored `backend\secrets\serviceAccoun
 
 All content in `/demo` is synthetic presentation data. It is not a real farm reading or model prediction. Do not put passwords, app passwords, or service-account files in Git or chat.
 
+## Connect the deployed Render demo
+
+The public Render Blueprint starts in memory mode until its Firebase credentials are added. To make dashboard readings and adjustable targets persist in Firebase:
+
+1. In Render, open the `mushroom-monitor-demo` service and select **Environment**.
+2. Set `DB_BACKEND` to `firebase` and `FIREBASE_URL` to the Realtime Database URL for the client-owned Firebase project.
+3. Under **Secret Files**, add a secret file at `/etc/secrets/serviceAccountKey.json` and upload the service-account JSON downloaded from that same Firebase project. Never commit this file or paste it into chat.
+4. Add or set `FIREBASE_CREDENTIALS` to `/etc/secrets/serviceAccountKey.json`.
+5. Save and deploy the environment changes.
+6. Open the deployed dashboard's `/api/dashboard` address. Confirm the response shows `"backend":"firebase"`; the dashboard connection card should say **Firebase connected**.
+7. Adjust a target in the dashboard. In Firebase Console → Realtime Database → Data, expand `/demo/settings/thresholds` to see the saved values. Custom readings and alerts appear in the other `/demo` entries.
+
+If the dashboard API reports `memory`, the Render environment is still using memory mode. Do not paste the service-account JSON into chat. Render supports uploading secret files from a service's **Environment** page; see [Render's environment and secrets guide](https://render.com/docs/configure-environment-variables).
+
 If no service-account key has been generated yet, the prototype still works in local memory mode. Its connection card will say **Local demo**, which is distinct from Firebase.

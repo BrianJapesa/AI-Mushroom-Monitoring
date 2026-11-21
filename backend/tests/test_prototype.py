@@ -25,9 +25,8 @@ def make_app(**kwargs: Any) -> Any:
         twilio_from="",
         alert_phones=(),
     )
-    return create_app(
-        store=MemoryDemoStore(), database=MemoryDB(), settings=settings, **kwargs
-    )
+    store = kwargs.pop("store", MemoryDemoStore())
+    return create_app(store=store, database=MemoryDB(), settings=settings, **kwargs)
 
 
 class FakeReference:
@@ -103,7 +102,9 @@ def make_firebase_store(monkeypatch: Any) -> FirebaseDemoStore:
     monkeypatch.setitem(__import__("sys").modules, "firebase_admin.db", database_module)
     from pathlib import Path
 
-    monkeypatch.setattr(Path, "is_file", lambda _self: True)
+    monkeypatch.setattr(
+        Path, "is_file", lambda path: path.name == "serviceAccountKey.json"
+    )
     return FirebaseDemoStore(
         "https://example.firebaseio.com", Path("serviceAccountKey.json")
     )
@@ -161,6 +162,23 @@ def test_demo_targets_are_adjustable_and_drive_scenario_values() -> None:
     assert dashboard["thresholds"] == targets
     assert warm.json["reading"]["temperature"] == 25
     assert any("above 24" in alert["message"] for alert in dashboard["alerts"])
+
+
+def test_saved_targets_load_from_store_when_app_starts_again() -> None:
+    store = MemoryDemoStore()
+    first_client = make_app(store=store).test_client()
+    targets = {
+        "temperature_min": 18,
+        "temperature_max": 24,
+        "humidity_min": 70,
+        "humidity_max": 88,
+    }
+
+    saved = first_client.post("/api/thresholds", json=targets)
+    restarted_dashboard = make_app(store=store).test_client().get("/api/dashboard")
+
+    assert saved.status_code == 200
+    assert restarted_dashboard.json["thresholds"] == targets
 
 
 def test_custom_demo_reading_is_stored_and_checked_against_targets() -> None:
@@ -271,6 +289,27 @@ def test_firebase_store_seeds_and_reads_demo_records(monkeypatch: Any) -> None:
         alert["type"] == "Temperature example" and alert["synthetic"] is True
         for alert in updated["alerts"]
     )
+
+
+def test_firebase_store_persists_adjustable_targets(monkeypatch: Any) -> None:
+    store = make_firebase_store(monkeypatch)
+    targets = {
+        "temperature_min": 18,
+        "temperature_max": 24,
+        "humidity_min": 70,
+        "humidity_max": 88,
+    }
+
+    saved = make_app(store=store).test_client().post("/api/thresholds", json=targets)
+    reloaded = make_app(store=store).test_client().get("/api/dashboard")
+
+    assert saved.status_code == 200
+    assert store.get_demo_targets() == {
+        key: float(value) for key, value in targets.items()
+    }
+    assert reloaded.json["thresholds"] == store.get_demo_targets()
+    store.reset()
+    assert store.get_demo_targets() is None
 
 
 def test_local_settings_reload_switches_database_backend(

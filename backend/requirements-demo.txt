@@ -1,7 +1,8 @@
-# Public classroom/presentation demo only: no Firebase, TensorFlow, or Twilio credentials.
+# Public demo dependencies; Firebase support is optional and requires client credentials.
 Flask~=3.1.3
 waitress~=3.0.2
 Jinja2~=3.1.6
+firebase-admin~=7.8.0
 opencv-python-headless~=5.1.0.95
 numpy~=2.4.6
 python-dotenv~=1.2.4
