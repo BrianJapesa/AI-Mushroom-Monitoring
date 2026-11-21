@@ -324,7 +324,7 @@ if __name__ == "__main__":
     monitor = app.extensions["mushroom"]["alerts"]
     monitor.start_monitor()
     try:
-        serve(app, host="127.0.0.1", port=5000)
+        serve(app, host="127.0.0.1", port=int(os.getenv("PORT", "5000")))
     finally:
         monitor.stop_monitor()
         app.extensions["mushroom"]["notifier"].close()

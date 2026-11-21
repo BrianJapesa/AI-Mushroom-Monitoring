@@ -1,6 +1,6 @@
 # Monitoring API
 
-The service exposes the sensor, bag, alert, history, and export routes below. It is intended to run on the farm computer and is served locally at `http://127.0.0.1:5000/`. All API routes except `/health` and `/` require `X-API-Key` when `API_KEY` is configured. All errors use `{"error":"plain-language explanation"}`. Timestamps are stored in UTC; the client time zone is Nairobi.
+The service exposes the sensor, bag, alert, history, and export routes below. It is intended to run on the farm computer and is served locally at `http://127.0.0.1:5000/` by default. Set `PORT` to another local port if 5000 is already occupied. All API routes except `/health` and `/` require `X-API-Key` when `API_KEY` is configured. All errors use `{"error":"plain-language explanation"}`. Timestamps are stored in UTC; the client time zone is Nairobi.
 
 ## Routes
 
