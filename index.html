@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Japesa Farms — AI Mushroom Monitoring</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;font-family:'Segoe UI',system-ui,sans-serif}
+  body{background:#f0f4f1;color:#1f2d27;display:flex;min-height:100vh}
+  #loginScreen{position:fixed;inset:0;background:linear-gradient(135deg,#1d3b2a,#2a5540);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px}
+  .login-box{background:#fff;padding:38px 34px;border-radius:16px;width:100%;max-width:380px;box-shadow:0 20px 50px rgba(0,0,0,.3)}
+  .login-box h1{font-size:22px;color:#1d3b2a;margin-bottom:4px}
+  .login-box p{font-size:12px;color:#6b7f74;margin-bottom:22px}
+  .login-box label{font-size:12px;font-weight:600;color:#4a6355;display:block;margin-bottom:5px;margin-top:14px}
+  .login-box input{width:100%;padding:11px 13px;border:1px solid #d5e0d9;border-radius:8px;font-size:14px;outline:none}
+  .login-box input:focus{border-color:#1d3b2a}
+  .login-box button{width:100%;margin-top:22px;padding:12px;background:#1d3b2a;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}
+  .login-box button:hover{background:#2a5540}
+  .login-err{color:#dc2626;font-size:12px;margin-top:10px;min-height:16px}
+  .login-demo{margin-top:18px;font-size:11px;color:#9aa89f;text-align:center;line-height:1.6}
+  #app{display:none;width:100%}
+  .sidebar{width:240px;background:#1d3b2a;color:#fff;padding:22px 0;position:fixed;height:100vh;overflow-y:auto}
+  .sidebar h1{font-size:17px;padding:0 20px 18px;border-bottom:1px solid #2f5a42;line-height:1.4}
+  .sidebar h1 span{display:block;font-size:11px;color:#9cc7ae;font-weight:400;margin-top:4px}
+  .nav-item{padding:13px 20px;cursor:pointer;font-size:14px;display:flex;align-items:center;gap:10px;border-left:3px solid transparent;transition:.2s;user-select:none}
+  .nav-item:hover{background:#264d36}
+  .nav-item.active{background:#2a5540;border-left-color:#4ade80}
+  .logout{margin-top:20px;padding:13px 20px;font-size:13px;color:#fca5a5;cursor:pointer;border-top:1px solid #2f5a42}
+  .logout:hover{background:#264d36}
+  .main{margin-left:240px;flex:1;padding:26px 32px}
+  .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;flex-wrap:wrap;gap:12px}
+  .topbar h2{font-size:22px}
+  .status-pill{background:#dcfce7;color:#166534;padding:7px 14px;border-radius:20px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:7px}
+  .status-pill.offline{background:#fef3c7;color:#92400e}
+  .dot{width:8px;height:8px;background:#22c55e;border-radius:50%;animation:pulse 2s infinite}
+  .status-pill.offline .dot{background:#f59e0b;animation:none}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .grid{display:grid;gap:18px}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+  .card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+  .card .label{font-size:12px;color:#6b7f74;text-transform:uppercase;letter-spacing:.5px}
+  .card .value{font-size:30px;font-weight:700;margin:8px 0 4px}
+  .card .sub{font-size:12px;color:#8a9c92}
+  .card.warn .value{color:#d97706}
+  .card.ok .value{color:#16a34a}
+  .card.bad .value{color:#dc2626}
+  .row2{grid-template-columns:1.5fr 1fr;margin-top:18px}
+  @media(max-width:900px){.row2{grid-template-columns:1fr}.main{margin-left:0;padding:16px}.sidebar{display:none}}
+  .chart-card h3,.panel h3{font-size:15px;margin-bottom:14px;color:#1d3b2a}
+  .chart-wrap{height:230px}
+  .alert{display:flex;gap:12px;padding:12px;border-radius:8px;margin-bottom:10px;font-size:13px}
+  .alert.high{background:#fef2f2;border-left:4px solid #dc2626}
+  .alert.med{background:#fffbeb;border-left:4px solid #f59e0b}
+  .alert.low{background:#eff6ff;border-left:4px solid #3b82f6}
+  .alert b{display:block;margin-bottom:2px}
+  .alert small{color:#6b7f74}
+  .bag-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
+  .bag{background:#fff;border-radius:10px;padding:14px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+  .bag .thumb{height:70px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:28px;margin-bottom:10px}
+  .bag.healthy .thumb{background:#dcfce7}
+  .bag.suspect .thumb{background:#fef3c7}
+  .bag.contaminated .thumb{background:#fee2e2}
+  .tag{font-size:11px;padding:3px 9px;border-radius:12px;font-weight:600}
+  .tag.healthy{background:#dcfce7;color:#166534}
+  .tag.suspect{background:#fef3c7;color:#92400e}
+  .tag.contaminated{background:#fee2e2;color:#991b1b}
+  .tag.open{background:#fee2e2;color:#991b1b}
+  .tag.review{background:#fef3c7;color:#92400e}
+  .tag.resolved{background:#dcfce7;color:#166534}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;padding:11px;background:#f4f8f5;color:#4a6355;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  td{padding:11px;border-top:1px solid #eef2ef}
+  tr:hover td{background:#fafcfb}
+  .btn{background:#1d3b2a;color:#fff;border:none;padding:9px 16px;border-radius:7px;font-size:13px;cursor:pointer}
+  .btn:hover{background:#2a5540}
+  .btn.secondary{background:#f4f8f5;color:#1d3b2a;border:1px solid #d5e0d9}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .input{width:100%;padding:10px 13px;border:1px solid #d5e0d9;border-radius:8px;font-size:13px;outline:none}
+  .page{display:none}
+  .page.active{display:block}
+  .badge{font-size:11px;color:#6b7f74;margin-left:8px;font-weight:400}
+  .upload-zone{border:2px dashed #d5e0d9;border-radius:12px;padding:28px;text-align:center;cursor:pointer;transition:.2s;background:#fafcfb}
+  .upload-zone:hover{border-color:#1d3b2a;background:#f0f4f1}
+  .upload-zone .icon{font-size:36px;margin-bottom:8px}
+  .upload-zone p{font-size:13px;color:#6b7f74}
+  .preview{max-width:100%;max-height:220px;border-radius:10px;margin-top:14px;display:none}
+  .result-box{margin-top:16px;padding:14px;border-radius:10px;display:none;font-size:14px}
+  .result-box.healthy{background:#dcfce7;color:#166534}
+  .result-box.suspect{background:#fef3c7;color:#92400e}
+  .result-box.contaminated{background:#fee2e2;color:#991b1b}
+  .result-box b{display:block;font-size:16px;margin-bottom:4px}
+  .toast{position:fixed;bottom:24px;right:24px;background:#1d3b2a;color:#fff;padding:14px 20px;border-radius:10px;font-size:13px;box-shadow:0 10px 30px rgba(0,0,0,.25);opacity:0;transform:translateY(20px);transition:.3s;z-index:200}
+  .toast.show{opacity:1;transform:none}
+  .settings-row{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid #eef2ef;font-size:14px}
+  .settings-row:last-child{border-bottom:none}
+  .settings-row label{color:#4a6355;font-weight:500}
+  .settings-row .val{font-family:monospace;font-size:12px;color:#6b7f74;background:#f4f8f5;padding:4px 8px;border-radius:6px}
+</style>
+</head>
+<body>
+
+<div id="loginScreen">
+  <div class="login-box">
+    <h1>🌱 Japesa Farms</h1>
+    <p>AI-Based Smart Monitoring System</p>
+    <label>Email</label>
+    <input id="email" type="email" placeholder="admin@japesafarms.co.ke">
+    <label>Password</label>
+    <input id="password" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()">
+    <button onclick="doLogin()" id="loginBtn">Sign In</button>
+    <div class="login-err" id="loginErr"></div>
+    <div class="login-demo"><b>Demo:</b> admin@japesafarms.co.ke / farm2026</div>
+  </div>
+</div>
+
+<div id="app">
+  <aside class="sidebar">
+    <h1>AI Mushroom Monitoring<span>Japesa Farms & Agriculture Ltd</span></h1>
+    <div class="nav-item active" onclick="nav(this,'dash')">📊 Dashboard</div>
+    <div class="nav-item" onclick="nav(this,'detect')">🧠 AI Detection</div>
+    <div class="nav-item" onclick="nav(this,'alerts')">🔔 Alerts</div>
+    <div class="nav-item" onclick="nav(this,'records')">📁 Records</div>
+    <div class="nav-item" onclick="nav(this,'settings')">⚙️ Settings</div>
+    <div class="nav-item" onclick="nav(this,'about')">ℹ️ About</div>
+    <div class="logout" onclick="doLogout()">🚪 Sign Out</div>
+  </aside>
+  <main class="main">
+    <div class="topbar">
+      <h2 id="pageTitle">Live Farm Dashboard</h2>
+      <div class="status-pill offline" id="connPill"><span class="dot"></span> <span id="connText">Connecting…</span></div>
+    </div>
+
+    <section id="dash" class="page active">
+      <div class="grid cards">
+        <div class="card ok" id="tempCard"><div class="label">Temperature</div><div class="value" id="tempVal">-- °C</div><div class="sub">Target: 22 – 26 °C</div></div>
+        <div class="card ok" id="humCard"><div class="label">Humidity</div><div class="value" id="humVal">-- %</div><div class="sub">Target: 80 – 90 %</div></div>
+        <div class="card"><div class="label">Active Bags</div><div class="value" id="bagCount">--</div><div class="sub" id="bagSub">Loading…</div></div>
+        <div class="card warn" id="alertCard"><div class="label">Open Alerts</div><div class="value" id="alertCount">--</div><div class="sub">Bags needing inspection</div></div>
+      </div>
+      <div class="grid row2">
+        <div class="card chart-card"><h3>Temperature & Humidity — Last 24 Hours</h3><div class="chart-wrap"><canvas id="trendChart"></canvas></div></div>
+        <div class="card panel"><h3>Recent Alerts</h3><div id="recentAlerts"><p style="font-size:13px;color:#8a9c92">No alerts yet.</p></div></div>
+      </div>
+    </section>
+
+    <section id="detect" class="page">
+      <div class="card" style="margin-bottom:18px">
+        <h3>AI Contamination Detection</h3>
+        <p style="font-size:13px;color:#6b7f74;margin-bottom:14px">Upload a photo of a mushroom bag. The backend model analyses it and updates Firebase.</p>
+        <div style="margin-bottom:14px">
+          <label style="font-size:12px;font-weight:600;color:#4a6355;display:block;margin-bottom:6px">Bag ID</label>
+          <input class="input" id="bagIdInput" placeholder="e.g. B-114" style="max-width:260px">
+        </div>
+        <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+          <div class="icon">📷</div>
+          <p><b>Click to upload</b> or drag &amp; drop a mushroom bag photo</p>
+        </div>
+        <input type="file" id="fileInput" accept="image/*" style="display:none" onchange="handleFile(this.files[0])">
+        <img id="preview" class="preview">
+        <div class="result-box" id="resultBox"></div>
+        <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn" id="scanBtn" onclick="runScan()" disabled>▶ Run AI Scan</button>
+          <button class="btn secondary" onclick="clearUpload()">✕ Clear</button>
+        </div>
+        <p id="scanStatus" style="font-size:13px;color:#6b7f74;margin-top:12px"></p>
+      </div>
+      <div class="card"><h3>Bag Status Overview</h3><div class="bag-grid" id="bagGrid"></div></div>
+    </section>
+
+    <section id="alerts" class="page">
+      <div class="card">
+        <h3>Alert History <span class="badge" id="alertBadge"></span></h3>
+        <table><thead><tr><th>Time</th><th>Type</th><th>Location</th><th>Message</th><th>Status</th></tr></thead>
+        <tbody id="alertBody"></tbody></table>
+      </div>
+    </section>
+
+    <section id="records" class="page">
+      <div class="card">
+        <h3>Environmental Records <span class="badge" id="recBadge"></span></h3>
+        <table><thead><tr><th>Date</th><th>Time</th><th>Temperature</th><th>Humidity</th><th>Room</th></tr></thead>
+        <tbody id="recordBody"></tbody></table>
+      </div>
+    </section>
+
+    <section id="settings" class="page">
+      <div class="card">
+        <h3>System Configuration</h3>
+        <div class="settings-row"><label>Mode</label><span class="val" id="cfgMode">—</span></div>
+        <div class="settings-row"><label>Firebase Project</label><span class="val" id="cfgProject">—</span></div>
+        <div class="settings-row"><label>Backend URL</label><span class="val" id="cfgBackend">—</span></div>
+        <div class="settings-row"><label>Temperature Threshold</label><span class="val">22 – 26 °C</span></div>
+        <div class="settings-row"><label>Humidity Threshold</label><span class="val">80 – 90 %</span></div>
+      </div>
+    </section>
+
+    <section id="about" class="page">
+      <div class="card" style="line-height:1.8;font-size:14px">
+        <h3>About This System</h3>
+        <p><b>Project:</b> AI-Based Smart Monitoring System for Oyster Mushroom Cultivation</p>
+        <p><b>Student:</b> Brian Otieno Odhiambo (24/02089)</p>
+        <p><b>Supervisor:</b> Fredrick Omondi</p>
+        <p><b>Organisation:</b> Japesa Farms & Agriculture Ltd</p>
+        <p style="margin-top:12px"><b>Architecture:</b></p>
+        <ul style="margin-left:20px;margin-top:6px;font-size:13px;color:#4a6355">
+          <li>DHT22 sensor → ESP32 → Firebase Realtime Database</li>
+          <li>Camera → Flask backend → TensorFlow model → Firebase</li>
+          <li>Firebase → this dashboard (live sync)</li>
+          <li>Alerts → Twilio SMS + SMTP email</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const DEMO_MODE = true;
+let chart = null, bags = [], alerts = [], records = [], uploadedFile = null;
+
+function doLogin(){
+  const e = document.getElementById('email').value.trim();
+  const p = document.getElementById('password').value;
+  const err = document.getElementById('loginErr');
+  err.textContent = '';
+  if (DEMO_MODE){
+    if (e === 'admin@japesafarms.co.ke' && p === 'farm2026'){
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('app').style.display = 'flex';
+      initData();
+    } else {
+      err.textContent = 'Invalid credentials. Use admin@japesafarms.co.ke / farm2026';
+    }
+  }
+}
+
+function doLogout(){ location.reload(); }
+
+function nav(el, id){
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  el.classList.add('active');
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  document.getElementById('pageTitle').textContent = el.textContent.trim().replace(/^[^\s]+\s/,'');
+}
+
+function initData(){
+  document.getElementById('cfgMode').textContent = 'DEMO (local simulation)';
+  document.getElementById('cfgProject').textContent = 'none';
+  document.getElementById('cfgBackend').textContent = 'http://localhost:5000';
+  setConnected(true, 'DEMO MODE');
+  seedDemoData();
+  startDemoLoop();
+  buildChart();
+  renderAll();
+  setupUploadZone();
+}
+
+function setConnected(ok, text){
+  const pill = document.getElementById('connPill');
+  pill.classList.toggle('offline', !ok);
+  document.getElementById('connText').textContent = text;
+}
+
+function seedDemoData(){
+  bags = [
+    {id:'B-101',status:'healthy'},{id:'B-102',status:'healthy'},
+    {id:'B-114',status:'contaminated'},{id:'B-097',status:'suspect'},
+    {id:'B-120',status:'healthy'},{id:'B-121',status:'healthy'},
+    {id:'B-125',status:'suspect'},{id:'B-130',status:'healthy'}
+  ];
+  alerts = [
+    {time:'10:42 AM', type:'Contamination', location:'Room 2 · B-114', message:'Possible contamination detected (91%)', status:'open', level:'high'},
+    {time:'09:15 AM', type:'Humidity', location:'Room 2', message:'Humidity below threshold (76%)', status:'open', level:'med'},
+    {time:'08:30 AM', type:'Contamination', location:'Room 1 · B-097', message:'Bag flagged for review (74%)', status:'review', level:'med'},
+    {time:'07:50 AM', type:'System', location:'Room 1', message:'Sensor reconnected', status:'resolved', level:'low'}
+  ];
+  records = [];
+  for (let i=0;i<12;i++){
+    const t = new Date(Date.now()-i*3600000);
+    records.push({
+      date: t.toLocaleDateString(),
+      time: t.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}),
+      temp: (23.5+Math.random()*2.5).toFixed(1),
+      hum: Math.round(82+Math.random()*8),
+      room: (i%2)+1
+    });
+  }
+}
+
+function startDemoLoop(){
+  updateLiveReadings(24.6, 87);
+  setInterval(()=>{ updateLiveReadings(23.5+Math.random()*2.5, 82+Math.random()*8); }, 4000);
+}
+
+function updateLiveReadings(t, h){
+  document.getElementById('tempVal').textContent = t.toFixed(1)+' °C';
+  document.getElementById('humVal').textContent = Math.round(h)+' %';
+  const tc = document.getElementById('tempCard');
+  tc.classList.remove('ok','warn','bad');
+  tc.classList.add((t<22||t>26)?'warn':'ok');
+  const hc = document.getElementById('humCard');
+  hc.classList.remove('ok','warn','bad');
+  hc.classList.add(h<80?'warn':'ok');
+  if (chart){
+    const ds = chart.data.datasets;
+    ds[0].data.push(+t.toFixed(1)); ds[0].data.shift();
+    ds[1].data.push(Math.round(h)); ds[1].data.shift();
+    chart.update('none');
+  }
+}
+
+function renderAll(){ renderBags(); renderAlerts(); renderRecords(); renderDashStats(); }
+
+function renderDashStats(){
+  document.getElementById('bagCount').textContent = bags.length;
+  document.getElementById('bagSub').textContent = bags.length+' bags monitored';
+  const open = alerts.filter(a=>a.status==='open'||a.status==='review').length;
+  document.getElementById('alertCount').textContent = open;
+  const card = document.getElementById('alertCard');
+  card.classList.remove('warn','ok','bad');
+  card.classList.add(open>=3?'bad':open>0?'warn':'ok');
+}
+
+function renderBags(){
+  const grid = document.getElementById('bagGrid');
+  if (!bags.length){ grid.innerHTML = '<p style="font-size:13px;color:#8a9c92">No bags registered yet.</p>'; return; }
+  grid.innerHTML = bags.map(b=>`
+    <div class="bag ${b.status}">
+      <div class="thumb">${b.status==='healthy'?'🍄':b.status==='suspect'?'⚠️':'🦠'}</div>
+      <div style="font-weight:600;font-size:13px">Bag ${b.id}</div>
+      <div style="margin-top:7px"><span class="tag ${b.status}">${b.status.toUpperCase()}</span></div>
+    </div>`).join('');
+}
+
+function renderAlerts(){
+  const recent = document.getElementById('recentAlerts');
+  if (!alerts.length){
+    recent.innerHTML = '<p style="font-size:13px;color:#8a9c92">No alerts yet.</p>';
+  } else {
+    recent.innerHTML = alerts.slice(0,4).map(a=>`
+      <div class="alert ${a.level||'low'}">
+        <div>${a.level==='high'?'⚠️':a.level==='med'?'🔍':'✅'}</div>
+        <div><b>${a.message}</b><small>${a.time||''} · ${a.location||''}</small></div>
+      </div>`).join('');
+  }
+  const body = document.getElementById('alertBody');
+  document.getElementById('alertBadge').textContent = alerts.length+' entries';
+  if (!alerts.length){
+    body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#8a9c92;padding:24px">No alerts yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = alerts.map(a=>`
+    <tr><td>${a.time||''}</td><td>${a.type||'—'}</td><td>${a.location||'—'}</td>
+    <td>${a.message||''}</td>
+    <td><span class="tag ${a.status||'open'}">${(a.status||'open').toUpperCase()}</span></td></tr>`).join('');
+}
+
+function renderRecords(){
+  const body = document.getElementById('recordBody');
+  document.getElementById('recBadge').textContent = records.length+' records';
+  if (!records.length){
+    body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#8a9c92;padding:24px">No records yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = records.map(r=>`
+    <tr><td>${r.date||''}</td><td>${r.time||''}</td>
+    <td>${r.temp} °C</td><td>${r.hum} %</td><td>Room ${r.room}</td></tr>`).join('');
+}
+
+function buildChart(){
+  if (chart) return;
+  const labels = Array.from({length:12},(_,i)=>(i*2)+':00');
+  chart = new Chart(document.getElementById('trendChart'), {
+    type:'line',
+    data:{ labels, datasets:[
+      {label:'Temp (°C)', data:[24,23.8,23.5,23.2,23.6,24.1,24.8,25.2,24.6,24.2,23.9,24.6],
+       borderColor:'#f59e0b', backgroundColor:'rgba(245,158,11,.08)', tension:.4, fill:true},
+      {label:'Humidity (%)', data:[86,87,88,89,88,86,83,81,84,86,87,87],
+       borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,.08)', tension:.4, fill:true}
+    ]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{position:'bottom'}},
+      scales:{y:{beginAtZero:false,grid:{color:'#eef2ef'}},x:{grid:{display:false}}}}
+  });
+}
+
+function setupUploadZone(){
+  const zone = document.getElementById('uploadZone');
+  zone.addEventListener('dragover', e=>{ e.preventDefault(); zone.style.borderColor='#4ade80'; });
+  zone.addEventListener('dragleave', ()=>{ zone.style.borderColor='#d5e0d9'; });
+  zone.addEventListener('drop', e=>{
+    e.preventDefault(); zone.style.borderColor='#d5e0d9';
+    if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+  });
+}
+
+function handleFile(file){
+  if (!file) return;
+  uploadedFile = file;
+  const reader = new FileReader();
+  reader.onload = e=>{
+    const img = document.getElementById('preview');
+    img.src = e.target.result;
+    img.style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+  document.getElementById('scanBtn').disabled = false;
+  document.getElementById('resultBox').style.display = 'none';
+  document.getElementById('scanStatus').textContent = '';
+}
+
+function clearUpload(){
+  uploadedFile = null;
+  document.getElementById('preview').style.display = 'none';
+  document.getElementById('fileInput').value = '';
+  document.getElementById('scanBtn').disabled = true;
+  document.getElementById('resultBox').style.display = 'none';
+  document.getElementById('scanStatus').textContent = '';
+}
+
+function runScan(){
+  if (!uploadedFile) return;
+  const bagId = document.getElementById('bagIdInput').value.trim() || ('B-'+Math.floor(Math.random()*900+100));
+  const status = document.getElementById('scanStatus');
+  status.textContent = '⏳ Scanning with AI model…';
+  document.getElementById('scanBtn').disabled = true;
+
+  setTimeout(()=>{
+    const options = ['healthy','suspect','contaminated'];
+    const weights = [0.6, 0.25, 0.15];
+    let r = Math.random(), label = 'healthy', acc = 0;
+    for (let i=0;i<options.length;i++){ acc += weights[i]; if (r <= acc){ label = options[i]; break; } }
+    const conf = Math.round((70 + Math.random()*28));
+
+    const box = document.getElementById('resultBox');
+    box.className = 'result-box '+label;
+    box.style.display = 'block';
+    box.innerHTML = `<b>${label.toUpperCase()} — ${conf}% confidence</b>
+      Bag ${bagId} · ${new Date().toLocaleTimeString()}<br>
+      <small>${label==='healthy'?'No contamination detected.':label==='suspect'?'Possible early signs — inspect soon.':'Contamination likely — isolate immediately.'}</small>`;
+
+    bags = bags.filter(b=>b.id !== bagId);
+    bags.push({id: bagId, status: label, confidence: conf});
+    if (label !== 'healthy'){
+      alerts.unshift({
+        time: new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}),
+        type:'Contamination', location:'Bag '+bagId,
+        message:`Bag ${bagId} flagged as ${label} (${conf}%)`,
+        status: label==='contaminated'?'open':'review',
+        level: label==='contaminated'?'high':'med'
+      });
+    }
+    renderBags(); renderAlerts(); renderDashStats();
+
+    status.textContent = '✔ Scan complete.';
+    document.getElementById('scanBtn').disabled = false;
+    showToast(`Scan complete — ${label} (${conf}%)`);
+  }, 1200);
+}
+
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2800);
+}
+</script>
+</body>
+</html>
