@@ -119,6 +119,8 @@ class UnavailableDemoStore:
 
     get_dashboard = _fail
     add_reading = _fail
+    get_demo_targets = _fail
+    set_demo_targets = _fail
     reset = _fail
 
 
@@ -153,6 +155,12 @@ def create_app(
     }
     demo_target_lock = Lock()
     demo_targets = dict(THRESHOLDS)
+    try:
+        saved_targets = _validated_demo_thresholds(active_store.get_demo_targets())
+    except Exception:  # noqa: BLE001 - a missing store must not block demo startup.
+        saved_targets = None
+    if saved_targets is not None:
+        demo_targets.update(saved_targets)
     create_monitoring_app(
         ROOT,
         settings=runtime_settings,
@@ -364,6 +372,15 @@ def create_app(
                     "error": "Enter valid target ranges. Temperature must be -40 to 84 °C and humidity 0 to 100%, with each minimum below its maximum."
                 }
             ), 400
+        try:
+            current_store().set_demo_targets(targets)
+        except Exception:  # noqa: BLE001 - provider details must not reach the browser or logs.
+            LOGGER.error("Could not save synthetic demonstration targets")
+            return jsonify(
+                {
+                    "error": "Could not save these targets. Check the Firebase setup and try again."
+                }
+            ), 503
         with demo_target_lock:
             demo_targets.clear()
             demo_targets.update(targets)

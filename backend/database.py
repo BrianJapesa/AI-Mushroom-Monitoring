@@ -34,6 +34,14 @@ class DemoStore(Protocol):
         """Restore the initial synthetic demo examples."""
         ...
 
+    def get_demo_targets(self) -> dict[str, float] | None:
+        """Return saved presentation targets, if configured."""
+        ...
+
+    def set_demo_targets(self, targets: dict[str, float]) -> None:
+        """Persist presentation targets alongside the demo data."""
+        ...
+
 
 class MemoryDemoStore:
     """Keep synthetic presentation data in memory for offline demonstrations."""
@@ -43,6 +51,17 @@ class MemoryDemoStore:
     def __init__(self) -> None:
         self._lock = Lock()
         self._data = build_synthetic_demo_state()
+        self._demo_targets: dict[str, float] | None = None
+
+    def get_demo_targets(self) -> dict[str, float] | None:
+        """Return a copy of targets held by this memory-only demo store."""
+        with self._lock:
+            return dict(self._demo_targets) if self._demo_targets is not None else None
+
+    def set_demo_targets(self, targets: dict[str, float]) -> None:
+        """Keep adjustable targets in memory for the current demo process."""
+        with self._lock:
+            self._demo_targets = dict(targets)
 
     def get_dashboard(self) -> dict[str, Any]:
         """Return a consistent snapshot of the in-memory example data."""
@@ -72,6 +91,7 @@ class MemoryDemoStore:
         """Replace current data with a fresh set of synthetic examples."""
         with self._lock:
             self._data = build_synthetic_demo_state()
+            self._demo_targets = None
 
 
 class FirebaseDemoStore:
@@ -124,6 +144,17 @@ class FirebaseDemoStore:
             "bags": bags,
             "sequence": int(raw.get("sequence", 0)),
         }
+
+    def get_demo_targets(self) -> dict[str, float] | None:
+        """Read saved adjustable targets from the Firebase `/demo` node."""
+        with self._lock:
+            value = self._reference.child("settings").child("thresholds").get()
+        return dict(value) if isinstance(value, dict) and value else None
+
+    def set_demo_targets(self, targets: dict[str, float]) -> None:
+        """Persist adjustable targets under Firebase `/demo/settings/thresholds`."""
+        with self._lock:
+            self._reference.child("settings").child("thresholds").set(dict(targets))
 
     def add_reading(
         self, reading: dict[str, Any], alert: dict[str, Any] | None
