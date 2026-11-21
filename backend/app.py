@@ -1,293 +1,336 @@
-# =============================================================
-# Japesa Farms — AI Mushroom Monitoring Backend (SINGLE FILE)
-# Student: Brian Otieno Odhiambo (24/02089)
-# Supervisor: Fredrick Omondi
-# =============================================================
-# SETUP (one time):
-#   1. pip install -r requirements.txt
-#   2. put serviceAccountKey.json in this folder
-#   3. create .env with Firebase URL + optional Twilio/SMTP
-#   4. python app.py
-# =============================================================
+"""Local presentation API for the Kenya-context mushroom monitor."""
 
-import os, io, time, threading, datetime
+from __future__ import annotations
+
+import logging
+import os
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
 from dotenv import load_dotenv
-load_dotenv()
-
-from flask import Flask, request, jsonify
-import firebase_admin
-from firebase_admin import credentials, db
-import numpy as np
-import cv2
-
-# Optional imports — feature auto-disables if package missing
-try:
-    from tensorflow.keras.models import load_model
-    TF_AVAILABLE = True
-except ImportError:
-    TF_AVAILABLE = False
+from flask import Flask, jsonify, request, send_from_directory
 
 try:
-    from twilio.rest import Client as TwilioClient
-    TWILIO_AVAILABLE = True
-except ImportError:
-    TWILIO_AVAILABLE = False
+    from .database import DemoStore, FirebaseDemoStore, MemoryDemoStore
+    from .mushroom import create_monitoring_app
+    from .mushroom.config import Settings
+    from .mushroom.db import Database
+    from .mushroom.inference import InferenceService
+    from .mushroom.notifier import Notifier
+    from .synthetic_demo_data import SYNTHETIC_SCENARIOS
+except ImportError:  # Support direct execution as python backend/app.py.
+    from database import DemoStore, FirebaseDemoStore, MemoryDemoStore
+    from mushroom import create_monitoring_app
+    from mushroom.config import Settings
+    from mushroom.db import Database
+    from mushroom.inference import InferenceService
+    from mushroom.notifier import Notifier
+    from synthetic_demo_data import SYNTHETIC_SCENARIOS
 
-import smtplib
-from email.mime.text import MIMEText
+ROOT = Path(__file__).resolve().parent.parent
+ENV_FILE = ROOT / "backend" / ".env"
+load_dotenv(ENV_FILE)
+LOGGER = logging.getLogger(__name__)
+THRESHOLDS = {
+    "temperature_min": 22.0,
+    "temperature_max": 26.0,
+    "humidity_min": 80.0,
+    "humidity_max": 90.0,
+}
 
-# =============================================================
-# CONFIG — read from .env, fall back to defaults
-# =============================================================
-FIREBASE_CRED   = os.getenv("FIREBASE_CRED", "serviceAccountKey.json")
-FIREBASE_URL    = os.getenv("FIREBASE_URL", "")
-MODEL_PATH      = os.getenv("MODEL_PATH", "../models/contamination_model.h5")
 
-TWILIO_SID      = os.getenv("TWILIO_SID", "")
-TWILIO_TOKEN    = os.getenv("TWILIO_TOKEN", "")
-TWILIO_FROM     = os.getenv("TWILIO_FROM", "")
-ALERT_PHONE     = os.getenv("ALERT_PHONE", "")
+def _timestamp(value: datetime) -> str:
+    """Format a timestamp as UTC ISO-8601 with an explicit offset."""
+    return value.astimezone(UTC).isoformat(timespec="seconds")
 
-SMTP_HOST       = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT       = int(os.getenv("SMTP_PORT", "465"))
-SMTP_USER       = os.getenv("SMTP_USER", "")
-SMTP_PASS       = os.getenv("SMTP_PASS", "")
-ALERT_EMAIL     = os.getenv("ALERT_EMAIL", "")
 
-ALERT_COOLDOWN  = int(os.getenv("ALERT_COOLDOWN", "600"))
-CLASSES         = ["healthy", "suspect", "contaminated"]
-IMG_SIZE        = 224
+def _configured_store() -> DemoStore:
+    """Choose the local memory store or Firebase demo node from environment settings."""
+    backend = os.getenv("DB_BACKEND", "memory").strip().lower()
+    if backend == "memory":
+        return MemoryDemoStore()
+    if backend != "firebase":
+        raise ValueError("DB_BACKEND must be either memory or firebase.")
 
-# =============================================================
-# FIREBASE INIT
-# =============================================================
-if not FIREBASE_URL:
-    raise SystemExit("ERROR: FIREBASE_URL not set. Add it to .env")
-
-cred = credentials.Certificate(FIREBASE_CRED)
-firebase_admin.initialize_app(cred, {"databaseURL": FIREBASE_URL})
-print("[OK] Firebase connected:", FIREBASE_URL)
-
-# =============================================================
-# AI MODEL LOAD (optional)
-# =============================================================
-model = None
-if TF_AVAILABLE:
-    try:
-        model = load_model(MODEL_PATH)
-        print(f"[OK] AI model loaded: {MODEL_PATH}")
-    except Exception as e:
-        print(f"[WARN] AI model not loaded ({e})")
-        print("       /predict will return 503 until model is trained.")
-else:
-    print("[WARN] TensorFlow not installed — AI detection disabled")
-
-# =============================================================
-# NOTIFIER — SMS + Email with rate limiting
-# =============================================================
-_last_sent = {}
-
-def _should_send(key):
-    now = time.time()
-    if key in _last_sent and (now - _last_sent[key]) < ALERT_COOLDOWN:
-        return False
-    _last_sent[key] = now
-    return True
-
-def send_sms(message, key="default"):
-    if not (TWILIO_AVAILABLE and TWILIO_SID and TWILIO_TOKEN and TWILIO_FROM and ALERT_PHONE):
-        return
-    if not _should_send("sms:" + key):
-        return
-    try:
-        TwilioClient(TWILIO_SID, TWILIO_TOKEN).messages.create(
-            body=f"🍄 Japesa Farms\n{message}",
-            from_=TWILIO_FROM, to=ALERT_PHONE
+    database_url = os.getenv("FIREBASE_URL", "").strip()
+    if not database_url:
+        raise ValueError(
+            "Add FIREBASE_URL to backend/.env before choosing Firebase mode."
         )
-        print(f"[SMS] sent -> {ALERT_PHONE}")
-    except Exception as e:
-        print(f"[SMS] failed: {e}")
+    credential_setting = Path(
+        os.getenv("FIREBASE_CREDENTIALS", "backend/secrets/serviceAccountKey.json")
+    )
+    credential_file = (
+        credential_setting
+        if credential_setting.is_absolute()
+        else ROOT / credential_setting
+    )
+    return FirebaseDemoStore(database_url, credential_file)
 
-def send_email(subject, body, key="default"):
-    if not (SMTP_USER and SMTP_PASS and ALERT_EMAIL):
-        return
-    if not _should_send("email:" + key):
-        return
+
+def _settings_signature() -> int | None:
+    """Return the local configuration modification time for safe live reload."""
     try:
-        msg = MIMEText(body, "plain", "utf-8")
-        msg["Subject"] = f"[Japesa Farms] {subject}"
-        msg["From"]    = SMTP_USER
-        msg["To"]      = ALERT_EMAIL
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as s:
-            s.login(SMTP_USER, SMTP_PASS)
-            s.send_message(msg)
-        print(f"[EMAIL] sent -> {ALERT_EMAIL}")
-    except Exception as e:
-        print(f"[EMAIL] failed: {e}")
+        return ENV_FILE.stat().st_mtime_ns
+    except OSError:
+        return None
 
-def notify(subject, message, key="default"):
-    threading.Thread(target=send_sms,   args=(message, key), daemon=True).start()
-    threading.Thread(target=send_email, args=(subject, message, key), daemon=True).start()
 
-# =============================================================
-# FLASK APP
-# =============================================================
-app = Flask(__name__)
+def _server_bind_options() -> tuple[str, int]:
+    """Choose a loopback-safe local bind unless the hosting platform overrides it."""
+    return os.getenv("HOST", "127.0.0.1"), int(os.getenv("PORT", "5000"))
 
-def preprocess(img_bytes):
-    arr = np.frombuffer(img_bytes, np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if img is None:
-        raise ValueError("Image could not be decoded")
-    img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
-    img = img.astype("float32") / 255.0
-    return np.expand_dims(img, 0)
 
-def _now_iso():
-    return datetime.datetime.utcnow().isoformat()
+class UnavailableDemoStore:
+    """Preserve app startup while avoiding fake fallback data on Firebase errors."""
 
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({
-        "status": "ok",
-        "model_loaded": model is not None,
-        "sms_enabled": bool(TWILIO_AVAILABLE and TWILIO_SID and ALERT_PHONE),
-        "email_enabled": bool(SMTP_USER and ALERT_EMAIL),
-        "firebase_url": FIREBASE_URL
-    })
+    backend_name = "unavailable"
 
-@app.route("/predict", methods=["POST"])
-def predict():
-    if model is None:
-        return jsonify({"error": "AI model not loaded"}), 503
-    if "image" not in request.files:
-        return jsonify({"error": "no image provided"}), 400
+    @staticmethod
+    def _fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("Presentation database is not available.")
 
-    bag_id    = request.form.get("bag_id", "unknown")
-    img_bytes = request.files["image"].read()
+    get_dashboard = _fail
+    add_reading = _fail
+    reset = _fail
 
-    try:
-        preds = model.predict(preprocess(img_bytes))[0]
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
 
-    idx        = int(np.argmax(preds))
-    label      = CLASSES[idx]
-    confidence = float(preds[idx]) * 100
-    ts         = _now_iso()
-
-    db.reference(f"bags/{bag_id}").update({
-        "id": bag_id, "status": label,
-        "confidence": round(confidence, 2), "timestamp": ts
-    })
-
-    if label in ("suspect", "contaminated"):
-        msg = f"Bag {bag_id} flagged as {label} ({confidence:.0f}%)"
-        db.reference("alerts").push({
-            "type": "Contamination",
-            "message": msg,
-            "location": f"Bag {bag_id}",
-            "status": "open" if label == "contaminated" else "review",
-            "level": "high" if label == "contaminated" else "med",
-            "timestamp": ts
-        })
-        notify("Contamination Alert",
-               f"{msg}\nPlease inspect immediately.",
-               key=f"bag:{bag_id}")
-
-    return jsonify({
-        "bag_id": bag_id, "status": label,
-        "confidence": round(confidence, 2), "timestamp": ts
-    })
-
-@app.route("/sensor", methods=["POST"])
-def sensor():
-    data = request.get_json(force=True, silent=True) or {}
-    t = data.get("temperature")
-    h = data.get("humidity")
-    if t is None or h is None:
-        return jsonify({"error": "temperature and humidity required"}), 400
-
-    ts = _now_iso()
-    db.reference("sensors/latest").update({
-        "temperature": t, "humidity": h, "timestamp": ts
-    })
-
-    db.reference("records").push({
-        "temp": t, "hum": h, "room": data.get("room", 1),
-        "timestamp": ts
-    })
-
-    if h < 80:
-        msg = f"Humidity dropped to {h}% (below 80% threshold)"
-        db.reference("alerts").push({
-            "type": "Humidity", "message": msg,
-            "location": "Room 1", "status": "open", "level": "med",
-            "timestamp": ts
-        })
-        notify("Humidity Alert", msg, key="humidity")
-
-    if t > 26:
-        msg = f"Temperature spike: {t}°C (above 26°C threshold)"
-        db.reference("alerts").push({
-            "type": "Temperature", "message": msg,
-            "location": "Room 1", "status": "open", "level": "med",
-            "timestamp": ts
-        })
-        notify("Temperature Alert", msg, key="temperature")
-
-    return jsonify({"status": "received", "timestamp": ts})
-
-@app.route("/alert", methods=["POST"])
-def manual_alert():
-    """Endpoint for external systems to push an alert."""
-    data = request.get_json(force=True, silent=True) or {}
-    if not data.get("message"):
-        return jsonify({"error": "message required"}), 400
-    data.setdefault("type", "Manual")
-    data.setdefault("status", "open")
-    data.setdefault("level", "med")
-    data.setdefault("location", "Farm")
-    data["timestamp"] = _now_iso()
-    db.reference("alerts").push(data)
-    return jsonify({"status": "queued", "timestamp": data["timestamp"]})
-
-# =============================================================
-# FIREBASE ALERT LISTENER — auto-notifies on new alerts
-# =============================================================
-def start_alert_listener():
-    def listener(event):
-        if event.event_type != "put" or event.path != "/":
-            return
+def create_app(
+    store: DemoStore | None = None,
+    database: Database | None = None,
+    settings: Settings | None = None,
+    inference: InferenceService | None = None,
+    notifier: Notifier | None = None,
+) -> Flask:
+    """Create the local presentation API with a memory or Firebase demo store."""
+    app = Flask(__name__, static_folder=None)
+    app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
+    runtime_settings = settings or Settings.from_env(ENV_FILE, ROOT)
+    store_error = False
+    if store is None:
         try:
-            snap = db.reference("alerts").get() or {}
-        except Exception:
-            return
-        for alert_id, alert in snap.items():
-            if not isinstance(alert, dict):
-                continue
-            if alert.get("notified") is True:
-                continue
-            if alert.get("status") not in ("open", "review"):
-                continue
-            msg = alert.get("message", "New alert")
-            notify(alert.get("type", "Alert"), msg, key=f"alert:{alert_id}")
-            db.reference(f"alerts/{alert_id}").update({"notified": True})
+            active_store = _configured_store()
+        except Exception:  # noqa: BLE001 - provider errors must not block app startup.
+            LOGGER.error(
+                "Presentation database is not ready; dashboard data is unavailable"
+            )
+            active_store = UnavailableDemoStore()
+            store_error = True
+    else:
+        active_store = store
+    store_state: dict[str, Any] = {
+        "store": active_store,
+        "settings_signature": _settings_signature(),
+        "store_error": store_error,
+        "fixed_store": store is not None,
+    }
+    create_monitoring_app(
+        ROOT,
+        settings=runtime_settings,
+        database=database,
+        inference=inference,
+        app=app,
+        notifier=notifier,
+    )
 
-    try:
-        db.reference("alerts").listen(listener)
-        print("[OK] Firebase alert listener started")
-    except Exception as e:
-        print(f"[WARN] Alert listener failed: {e}")
+    def current_store() -> DemoStore:
+        """Return the currently active storage adapter."""
+        return store_state["store"]
 
-# =============================================================
-# STARTUP
-# =============================================================
+    @app.before_request
+    def reload_local_database_settings() -> Any:
+        """Apply changed local settings so the presenter need not edit code."""
+        if store_state["fixed_store"]:
+            return None
+        signature = _settings_signature()
+        if signature == store_state["settings_signature"]:
+            return None
+        try:
+            load_dotenv(ENV_FILE, override=True)
+            store_state["store"] = _configured_store()
+            store_state["store_error"] = None
+        except Exception:  # noqa: BLE001 - provider details must not reach the browser or logs.
+            LOGGER.error("Could not apply local database settings")
+            store_state["store_error"] = True
+        store_state["settings_signature"] = signature
+        if (
+            store_state["store_error"]
+            and request.path.startswith("/api/")
+            and request.path != "/api/health"
+        ):
+            return jsonify(
+                {
+                    "error": "Firebase is not ready. Check the local Firebase setup and try again."
+                }
+            ), 503
+        return None
+
+    @app.get("/")
+    def dashboard() -> Any:
+        return send_from_directory(ROOT, "index.html")
+
+    @app.get("/health")
+    def health() -> Any:
+        """Report readiness without exposing local paths or provider errors."""
+        ext = app.extensions["mushroom"]
+        db = ext["db"]
+        try:
+            if getattr(db, "name", "") == "firebase":
+                db.get("meta/healthcheck")
+            connected = getattr(db, "name", "") == "firebase"
+            state = db.get("meta/state") or {}
+            last_sensor_ts = (
+                state.get("last_sensor_ts") if isinstance(state, dict) else None
+            )
+        except Exception:  # noqa: BLE001 - health data must not leak provider details.
+            connected = False
+            last_sensor_ts = None
+        inference = ext["inference"]
+        delivery = ext["notifier"].health()
+        return jsonify(
+            {
+                "status": "degraded"
+                if store_state["store_error"]
+                or db.name == "unavailable"
+                or (db.name == "firebase" and not connected)
+                else "ok",
+                "version": "1.0.0",
+                "mode": f"{current_store().backend_name}_demo",
+                "db_backend": db.name,
+                "firebase_connected": connected,
+                "auth_required": bool(runtime_settings.api_key),
+                "sms_enabled": delivery["sms_enabled"],
+                "email_enabled": delivery["email_enabled"],
+                "email_last_ok_ts": delivery["email_last_ok_ts"],
+                "email_last_error_class": delivery["email_last_error_class"],
+                "sms_last_ok_ts": delivery["sms_last_ok_ts"],
+                "sms_last_error_class": delivery["sms_last_error_class"],
+                "notification_failures": delivery["delivery_failures"],
+                "notification_queue_size": delivery["queue_size"],
+                "last_sensor_ts": last_sensor_ts,
+                "alert_monitor_running": ext["alerts"].monitor_running,
+                "demo_mode": True,
+                "model_loaded": inference.loaded,
+                "model_version": inference.version,
+                "model_synthetic": inference.synthetic,
+                "uptime_s": round(time.monotonic() - ext["started_at"]),
+                "timezone": runtime_settings.timezone,
+            }
+        )
+
+    @app.get("/api/dashboard")
+    def dashboard_data() -> Any:
+        try:
+            dashboard = current_store().get_dashboard()
+        except Exception:  # noqa: BLE001 - keep provider details out of the API response and logs.
+            LOGGER.error("Could not read presentation demo data")
+            return jsonify(
+                {
+                    "error": "Could not read the demo data. Check the Firebase connection and try again."
+                }
+            ), 503
+        return jsonify(
+            {
+                "mode": f"{current_store().backend_name}_demo",
+                "backend": current_store().backend_name,
+                "notice": "Demo data — not connected to farm sensors.",
+                "timezone": "Africa/Nairobi",
+                "currency": "KES",
+                "thresholds": THRESHOLDS,
+                **dashboard,
+            }
+        )
+
+    @app.post("/api/simulate")
+    def simulate_reading() -> Any:
+        payload = request.get_json(silent=True)
+        scenario = payload.get("scenario") if isinstance(payload, dict) else None
+        if scenario not in SYNTHETIC_SCENARIOS:
+            return jsonify(
+                {"error": "Choose a demo reading: normal, warm, or dry."}
+            ), 400
+
+        temperature, humidity = SYNTHETIC_SCENARIOS[scenario]
+        now = datetime.now(UTC)
+        reading = {
+            "temperature": temperature,
+            "humidity": humidity,
+            "room": "Room 1",
+            "device_id": "SYNTHETIC-DEMO-SENSOR",
+            "timestamp": _timestamp(now),
+            "synthetic": True,
+        }
+        alert = None
+        if scenario != "normal":
+            is_dry = scenario == "dry"
+            alert = {
+                "type": "Humidity example" if is_dry else "Temperature example",
+                "level": "medium",
+                "status": "demo",
+                "location": "Room 1",
+                "message": (
+                    f"Example humidity is {humidity}% (below 80%)."
+                    if is_dry
+                    else f"Example temperature is {temperature} °C (above 26 °C)."
+                ),
+                "timestamp": _timestamp(now),
+                "synthetic": True,
+            }
+        try:
+            current_store().add_reading(reading, alert)
+        except Exception:  # noqa: BLE001 - keep provider details out of the API response and logs.
+            LOGGER.error("Could not save synthetic demonstration data")
+            return jsonify(
+                {
+                    "error": "Could not save this example. Check the Firebase setup and try again."
+                }
+            ), 503
+        return jsonify({"status": "synthetic_demo_reading_added", "reading": reading})
+
+    @app.post("/api/demo/reset")
+    def reset_demo() -> Any:
+        try:
+            current_store().reset()
+        except Exception:  # noqa: BLE001 - keep provider details out of the API response and logs.
+            LOGGER.error("Could not reset synthetic demonstration data")
+            return jsonify(
+                {
+                    "error": "Could not reset the examples. Check the Firebase setup and try again."
+                }
+            ), 503
+        return jsonify({"status": "synthetic_demo_reset"})
+
+    @app.post("/api/predict")
+    def predict() -> Any:
+        return jsonify(
+            {
+                "error": "Photo checks are not active in this prototype. A trained, farm-reviewed model is required."
+            }
+        ), 503
+
+    @app.errorhandler(413)
+    def too_large(_: Exception) -> Any:
+        return jsonify(
+            {"error": "That file is too large. Choose a file smaller than 8 MB."}
+        ), 413
+
+    return app
+
+
+app = create_app()
+
+
 if __name__ == "__main__":
-    threading.Thread(target=start_alert_listener, daemon=True).start()
-    print("=" * 60)
-    print("  Japesa Farms Backend")
-    print("  http://0.0.0.0:5000")
-    print("  Endpoints: /health  /predict  /sensor  /alert")
-    print("=" * 60)
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    # Use a Windows-compatible production server, bound locally by default.
+    from waitress import serve
+
+    monitor = app.extensions["mushroom"]["alerts"]
+    monitor.start_monitor()
+    try:
+        host, port = _server_bind_options()
+        serve(app, host=host, port=port)
+    finally:
+        monitor.stop_monitor()
+        app.extensions["mushroom"]["notifier"].close()

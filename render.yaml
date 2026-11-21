@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: mushroom-monitor-demo
+    runtime: python
+    plan: free
+    autoDeployTrigger: "off"
+    buildCommand: pip install -r backend/requirements-demo.txt
+    startCommand: python backend/app.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DB_BACKEND
+        value: memory
+      - key: HOST
+        value: 0.0.0.0
+      - key: TIMEZONE
+        value: Africa/Nairobi
+      - key: RETENTION_DAYS_RECORDS
+        value: "0"
+      - key: API_KEY
+        value: ""
+      - key: FIREBASE_URL
+        value: ""
+      - key: SMTP_USER
+        value: ""
+      - key: SMTP_PASS
+        value: ""
+      - key: ALERT_EMAILS
+        value: ""
+      - key: TWILIO_SID
+        value: ""
+      - key: TWILIO_TOKEN
+        value: ""
+      - key: TWILIO_FROM
+        value: ""
+      - key: ALERT_PHONES
+        value: ""
