@@ -1,0 +1,7 @@
+flask
+firebase-admin
+tensorflow
+opencv-python-headless
+numpy
+twilio
+python-dotenv
