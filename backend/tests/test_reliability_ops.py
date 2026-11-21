@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from backend.app import create_app
+from backend.app import _server_bind_options, create_app
 from backend.database import MemoryDemoStore
 from backend.mushroom.config import Settings
 from backend.mushroom.db import DatabaseUnavailable, MemoryDB
@@ -36,6 +36,17 @@ def safe_settings(root: Path, **changes: Any) -> Settings:
         alert_phones=(),
     )
     return replace(value, **changes)
+
+
+def test_server_bind_options_default_to_loopback_and_allow_host_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("HOST", raising=False)
+    monkeypatch.delenv("PORT", raising=False)
+    assert _server_bind_options() == ("127.0.0.1", 5000)
+    monkeypatch.setenv("HOST", "0.0.0.0")
+    monkeypatch.setenv("PORT", "10000")
+    assert _server_bind_options() == ("0.0.0.0", 10000)
 
 
 @pytest.mark.parametrize(

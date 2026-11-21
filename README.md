@@ -41,3 +41,5 @@ The prototype keeps data in memory, so simulated readings reset when the app res
 - `POST /api/predict` — returns 503 until a real model is available.
 
 For Firebase setup, see `docs/FIREBASE_DEMO_SETUP.md`. More detail and limitations: `docs/PROTOTYPE.md`.
+
+To publish a temporary public presentation demo, follow `docs/DEPLOY_DEMO.md`. It uses memory-only synthetic examples and is not a production farm monitor.

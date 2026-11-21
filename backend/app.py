@@ -78,6 +78,11 @@ def _settings_signature() -> int | None:
         return None
 
 
+def _server_bind_options() -> tuple[str, int]:
+    """Choose a loopback-safe local bind unless the hosting platform overrides it."""
+    return os.getenv("HOST", "127.0.0.1"), int(os.getenv("PORT", "5000"))
+
+
 class UnavailableDemoStore:
     """Preserve app startup while avoiding fake fallback data on Firebase errors."""
 
@@ -324,7 +329,8 @@ if __name__ == "__main__":
     monitor = app.extensions["mushroom"]["alerts"]
     monitor.start_monitor()
     try:
-        serve(app, host="127.0.0.1", port=int(os.getenv("PORT", "5000")))
+        host, port = _server_bind_options()
+        serve(app, host=host, port=port)
     finally:
         monitor.stop_monitor()
         app.extensions["mushroom"]["notifier"].close()

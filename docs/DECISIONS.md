@@ -55,3 +55,11 @@ The user narrowed the immediate deliverable to a Kenya-context prototype. Implem
 - One earlier test attempt accidentally constructed the real Twilio client using test-only placeholder configuration; Twilio rejected the request with HTTP 401 and no SMS was sent. The test was changed to disable SMS entirely for that scenario; subsequent full suites use local SMTP/Twilio fakes and the safety gate in `backend/tests/conftest.py`. No further external request is permitted in automated tests.
 - Added `waitress~=3.0.2` because Flask's development server is not appropriate for the Windows production entry point. It was installed only in the repository `.venv` for local validation.
 - The existing listener on local port 5000 served an unrelated HTML page, so it was left running. Added a `PORT` override with 5000 as the default and started this demonstration on port 5001, forced to in-memory storage with email/SMS disabled. Manual check returned health `ok`, dashboard HTTP 200, and the visible demo-data notice.
+
+## Public presentation deployment preparation (2026-11-21)
+
+- Use Render as the default host for a public presentation demo because it supports a small Python web service and a client-owned `onrender.com` URL. Do not attach the client's Firebase database or notification credentials to this public demo.
+- `render.yaml` pins Python 3.11.9, selects the Free plan, binds to `0.0.0.0` and uses memory storage. The app must honor `HOST` and platform `PORT` while keeping loopback as the local default.
+- `backend/requirements-demo.txt` excludes TensorFlow, Firebase Admin, and Twilio because the published prototype has no model, external database, or messaging configured. OpenCV/NumPy remain because inference imports them for validation.
+- Public deploy was not initiated: the repo has no Git remote and no deployment action is available in this session. The owner must publish this branch to a private client-owned GitHub repository and create the service through the client's Render account before a URL can be created.
+- Render Free is for demos: it idles/sleeps, has temporary filesystem storage, and blocks outbound SMTP ports. The public app therefore remains synthetic, in-memory, and notification-disabled.
