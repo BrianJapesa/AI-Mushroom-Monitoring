@@ -27,3 +27,10 @@ The user authorized proceeding with all intake defaults. The non-secret assumpti
 The user narrowed the immediate deliverable to a Kenya-context prototype. Implement a loopback-only, in-memory demo with visibly synthetic readings and bag examples, Nairobi time, English/Kiswahili labels, and the brief's example cultivation thresholds. Real photo classification remains disabled until reviewed data and a real trained model exist. No service account, notification secret, phone number, or email address is needed or stored for this prototype.
 - The prototype was smoke-tested locally without external accounts: synthetic data is stored only in process memory and cleared on restart.
 - Five automated API checks passed. Ruff, Python compilation, Node syntax check, PowerShell syntax parse, and `pip check` passed. A manual local HTTP run returned health 200, dashboard 200, synthetic scenario 200, and the deliberate photo-model 503.
+
+## Firebase presentation integration (2026-11-21)
+
+- The user supplied a Firebase Realtime Database URL. Keep it out of committed config; the local setup script asks for it and saves it only to ignored `backend/.env`.
+- The presentation writes only visibly synthetic examples beneath the Firebase `/demo` node. Firebase security rules deny direct public client reads/writes; the server uses the local Admin SDK service-account file.
+- The user has not provided or installed a service-account key. Real Firebase connectivity has not yet been exercised. The memory demo remains the safe default until the key is stored locally.
+- The URL form `*.firebaseio.com` maps to the `us-central1` URL format in the current Firebase documentation. Treat the database location shown in the Firebase console as authoritative; database region is immutable after creation.

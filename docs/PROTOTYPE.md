@@ -8,7 +8,7 @@
 4. The browser opens `http://127.0.0.1:5000/`.
 5. Use the language button to switch between English and Kiswahili. Try the normal, warm-room, and low-humidity buttons. Use **Reset demo** to restore the starting examples.
 
-If the dashboard does not open, start the backend directly with `.\.venv\Scripts\python.exe backend\app.py`, then refresh the page. The startup script writes local logs to `logs\prototype.out.log` and `logs\prototype.error.log`.
+To connect the Firebase demo, follow `docs/FIREBASE_DEMO_SETUP.md`. If Firebase is not configured, the dashboard uses local memory. If the dashboard does not open, start the backend directly with `.\.venv\Scripts\python.exe backend\app.py`, then refresh the page. The startup script writes local logs to `logs\prototype.out.log` and `logs\prototype.error.log`.
 
 ## Kenyan context
 
@@ -26,7 +26,7 @@ The dashboard formats times for `Africa/Nairobi` (EAT, UTC+3). It uses the task'
 
 ## Not implemented or verified
 
-This is a UI and API prototype. It has no sensor or camera integration, Firebase, trained model, SMS, email, setup wizard, user accounts, persistence, or LAN access. `POST /api/predict` intentionally reports that photo checks are unavailable. Synthetic readings do not describe actual Japesa Farms conditions and are not AI results.
+This is a UI and API prototype. It has no sensor or camera integration, trained model, SMS, email, general setup wizard, user accounts, or LAN access. Firebase is optional for the presentation demo; when configured, it stores only synthetic examples under `/demo`. `POST /api/predict` intentionally reports that photo checks are unavailable. Synthetic readings do not describe actual Japesa Farms conditions and are not AI results.
 
 ## Before real farm use
 

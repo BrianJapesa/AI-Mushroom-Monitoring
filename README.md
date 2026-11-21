@@ -9,7 +9,7 @@
 
 A local dashboard for a Kenyan oyster mushroom farm. It displays example room readings, a 24-hour trend, sample alerts, and sample bag checks. Buttons add synthetic normal, warm-room, or low-humidity readings. The dashboard shows Nairobi local time (EAT, UTC+3) and includes English and Kiswahili labels.
 
-**Every displayed reading and bag check is synthetic demo data.** The prototype is not connected to farm sensors or Firebase. It does not send email or SMS. Photo AI is intentionally inactive because no labeled farm photos or trained model were supplied.
+**Every displayed reading and bag check is synthetic demo data.** The prototype is not connected to farm sensors. It can keep presentation examples in local memory or, after local setup, write them to the Firebase `/demo` node. It does not send email or SMS. Photo AI is intentionally inactive because no labeled farm photos or trained model were supplied.
 
 ## Run on Windows
 
@@ -21,7 +21,7 @@ In PowerShell, from the repository folder:
 .\.venv\Scripts\python.exe backend\app.py
 ```
 
-Then open `http://127.0.0.1:5000/`. Or run `scripts\prototype.ps1` to start the backend hidden and open the dashboard. Stop it by closing the process from Task Manager or use Ctrl+C if started directly in PowerShell.
+Then open `http://127.0.0.1:5000/`. Or double-click `Start-Prototype.bat` to start the backend and open the dashboard. Stop it by closing the process from Task Manager or use Ctrl+C if started directly in PowerShell.
 
 The prototype keeps data in memory, so simulated readings reset when the app restarts. It binds to this PC only. Do not use it as a production farm monitor.
 
@@ -40,4 +40,4 @@ The prototype keeps data in memory, so simulated readings reset when the app res
 - `POST /api/demo/reset` — resets the demo state.
 - `POST /api/predict` — returns 503 until a real model is available.
 
-More detail and limitations: `docs/PROTOTYPE.md`.
+For Firebase setup, see `docs/FIREBASE_DEMO_SETUP.md`. More detail and limitations: `docs/PROTOTYPE.md`.
