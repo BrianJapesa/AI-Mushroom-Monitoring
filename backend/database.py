@@ -1,4 +1,5 @@
 """Demo database adapters: local memory and Firebase Realtime Database."""
+
 from __future__ import annotations
 
 import logging
@@ -23,7 +24,9 @@ class DemoStore(Protocol):
         """Return the current demo dashboard data."""
         ...
 
-    def add_reading(self, reading: dict[str, Any], alert: dict[str, Any] | None) -> None:
+    def add_reading(
+        self, reading: dict[str, Any], alert: dict[str, Any] | None
+    ) -> None:
         """Save one clearly synthetic reading and optional example alert."""
         ...
 
@@ -44,9 +47,16 @@ class MemoryDemoStore:
     def get_dashboard(self) -> dict[str, Any]:
         """Return a consistent snapshot of the in-memory example data."""
         with self._lock:
-            return {**self._data, "records": list(self._data["records"]), "alerts": list(self._data["alerts"]), "bags": list(self._data["bags"])}
+            return {
+                **self._data,
+                "records": list(self._data["records"]),
+                "alerts": list(self._data["alerts"]),
+                "bags": list(self._data["bags"]),
+            }
 
-    def add_reading(self, reading: dict[str, Any], alert: dict[str, Any] | None) -> None:
+    def add_reading(
+        self, reading: dict[str, Any], alert: dict[str, Any] | None
+    ) -> None:
         """Append a simulated reading and optional simulated alert."""
         with self._lock:
             self._data["sequence"] += 1
@@ -74,7 +84,9 @@ class FirebaseDemoStore:
         if not database_url.startswith("https://"):
             raise ValueError("FIREBASE_URL must start with https://.")
         if not credential_file.is_file():
-            raise FileNotFoundError("Firebase service-account file is missing from backend/secrets.")
+            raise FileNotFoundError(
+                "Firebase service-account file is missing from backend/secrets."
+            )
 
         import firebase_admin
         from firebase_admin import credentials, db
@@ -102,6 +114,7 @@ class FirebaseDemoStore:
         alerts = self._values(raw.get("alerts"))
         bags = self._values(raw.get("bags"))
         records.sort(key=lambda item: item.get("timestamp", ""))
+        alerts.reverse()
         alerts.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
         bags.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
         return {
@@ -112,7 +125,9 @@ class FirebaseDemoStore:
             "sequence": int(raw.get("sequence", 0)),
         }
 
-    def add_reading(self, reading: dict[str, Any], alert: dict[str, Any] | None) -> None:
+    def add_reading(
+        self, reading: dict[str, Any], alert: dict[str, Any] | None
+    ) -> None:
         """Persist a simulated sample in Firebase so the frontend can read it back."""
         with self._lock:
             self._reference.child("latest").set(reading)
@@ -121,7 +136,9 @@ class FirebaseDemoStore:
                 alert_reference = self._reference.child("alerts").push()
                 saved_alert = {**alert, "id": alert_reference.key}
                 alert_reference.set(saved_alert)
-            self._reference.child("sequence").set(int(self._reference.child("sequence").get() or 0) + 1)
+            self._reference.child("sequence").set(
+                int(self._reference.child("sequence").get() or 0) + 1
+            )
 
     def reset(self) -> None:
         """Replace only the `/demo` presentation node with labeled examples."""

@@ -32,5 +32,14 @@ The user narrowed the immediate deliverable to a Kenya-context prototype. Implem
 
 - The user supplied a Firebase Realtime Database URL. Keep it out of committed config; the local setup script asks for it and saves it only to ignored `backend/.env`.
 - The presentation writes only visibly synthetic examples beneath the Firebase `/demo` node. Firebase security rules deny direct public client reads/writes; the server uses the local Admin SDK service-account file.
-- The user has not provided or installed a service-account key. Real Firebase connectivity has not yet been exercised. The memory demo remains the safe default until the key is stored locally.
+- A local service-account file and Firebase connection were verified in the earlier presentation phase. Keep the file local and ignored; automated tests use memory storage and do not touch Firebase.
 - The URL form `*.firebaseio.com` maps to the `us-central1` URL format in the current Firebase documentation. Treat the database location shown in the Firebase console as authoritative; database region is immutable after creation.
+
+## Phase 1 backend (2026-11-21)
+
+- Keep the working presentation database content isolated under `/demo`; production API records use the documented root paths. Automated tests inject `MemoryDB` and cannot write to the client's Firebase instance.
+- Preserve explicit synthetic markers and the dashboard demo notice. The request to hide fabricated readings was not followed because invented readings, credentials, or model results must not be presented as real.
+- Default to Firebase only when a Firebase URL is configured; otherwise start with in-memory storage. A missing local service-account key leaves the dashboard process available but the API reports degraded/unavailable database status.
+- Use a small in-process rate limiter rather than adding `flask-limiter`; it avoids another runtime dependency for this single-process Phase 1 service.
+- API key protection covers service routes except `/health` and the dashboard root. Keep `API_KEY` empty only for a local classroom demo; configure a client-owned key before exposing the host to a network.
+- The trained classifier and notification delivery remain unavailable until a reviewed dataset/model and client-owned SMTP/Twilio credentials are configured. Never substitute synthetic model results for farm classifications.

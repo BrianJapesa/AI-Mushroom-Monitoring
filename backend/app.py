@@ -1,8 +1,10 @@
 """Local presentation API for the Kenya-context mushroom monitor."""
+
 from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -12,16 +14,29 @@ from flask import Flask, jsonify, request, send_from_directory
 
 try:
     from .database import DemoStore, FirebaseDemoStore, MemoryDemoStore
+    from .mushroom import create_monitoring_app
+    from .mushroom.config import Settings
+    from .mushroom.db import Database
+    from .mushroom.inference import InferenceService
     from .synthetic_demo_data import SYNTHETIC_SCENARIOS
 except ImportError:  # Support direct execution as python backend/app.py.
     from database import DemoStore, FirebaseDemoStore, MemoryDemoStore
+    from mushroom import create_monitoring_app
+    from mushroom.config import Settings
+    from mushroom.db import Database
+    from mushroom.inference import InferenceService
     from synthetic_demo_data import SYNTHETIC_SCENARIOS
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT / "backend" / ".env"
 load_dotenv(ENV_FILE)
 LOGGER = logging.getLogger(__name__)
-THRESHOLDS = {"temperature_min": 22.0, "temperature_max": 26.0, "humidity_min": 80.0, "humidity_max": 90.0}
+THRESHOLDS = {
+    "temperature_min": 22.0,
+    "temperature_max": 26.0,
+    "humidity_min": 80.0,
+    "humidity_max": 90.0,
+}
 
 
 def _timestamp(value: datetime) -> str:
@@ -39,9 +54,17 @@ def _configured_store() -> DemoStore:
 
     database_url = os.getenv("FIREBASE_URL", "").strip()
     if not database_url:
-        raise ValueError("Add FIREBASE_URL to backend/.env before choosing Firebase mode.")
-    credential_setting = Path(os.getenv("FIREBASE_CREDENTIALS", "backend/secrets/serviceAccountKey.json"))
-    credential_file = credential_setting if credential_setting.is_absolute() else ROOT / credential_setting
+        raise ValueError(
+            "Add FIREBASE_URL to backend/.env before choosing Firebase mode."
+        )
+    credential_setting = Path(
+        os.getenv("FIREBASE_CREDENTIALS", "backend/secrets/serviceAccountKey.json")
+    )
+    credential_file = (
+        credential_setting
+        if credential_setting.is_absolute()
+        else ROOT / credential_setting
+    )
     return FirebaseDemoStore(database_url, credential_file)
 
 
@@ -53,16 +76,55 @@ def _settings_signature() -> int | None:
         return None
 
 
-def create_app(store: DemoStore | None = None) -> Flask:
+class UnavailableDemoStore:
+    """Preserve app startup while avoiding fake fallback data on Firebase errors."""
+
+    backend_name = "unavailable"
+
+    @staticmethod
+    def _fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("Presentation database is not available.")
+
+    get_dashboard = _fail
+    add_reading = _fail
+    reset = _fail
+
+
+def create_app(
+    store: DemoStore | None = None,
+    database: Database | None = None,
+    settings: Settings | None = None,
+    inference: InferenceService | None = None,
+) -> Flask:
     """Create the local presentation API with a memory or Firebase demo store."""
     app = Flask(__name__, static_folder=None)
     app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
+    runtime_settings = settings or Settings.from_env(ENV_FILE, ROOT)
+    store_error = False
+    if store is None:
+        try:
+            active_store = _configured_store()
+        except Exception:  # noqa: BLE001 - provider errors must not block app startup.
+            LOGGER.error(
+                "Presentation database is not ready; dashboard data is unavailable"
+            )
+            active_store = UnavailableDemoStore()
+            store_error = True
+    else:
+        active_store = store
     store_state: dict[str, Any] = {
-        "store": store or _configured_store(),
+        "store": active_store,
         "settings_signature": _settings_signature(),
-        "store_error": None,
+        "store_error": store_error,
         "fixed_store": store is not None,
     }
+    create_monitoring_app(
+        ROOT,
+        settings=runtime_settings,
+        database=database,
+        inference=inference,
+        app=app,
+    )
 
     def current_store() -> DemoStore:
         """Return the currently active storage adapter."""
@@ -84,8 +146,16 @@ def create_app(store: DemoStore | None = None) -> Flask:
             LOGGER.error("Could not apply local database settings")
             store_state["store_error"] = True
         store_state["settings_signature"] = signature
-        if store_state["store_error"] and request.path.startswith("/api/") and request.path != "/api/health":
-            return jsonify({"error": "Firebase is not ready. Check the local Firebase setup and try again."}), 503
+        if (
+            store_state["store_error"]
+            and request.path.startswith("/api/")
+            and request.path != "/api/health"
+        ):
+            return jsonify(
+                {
+                    "error": "Firebase is not ready. Check the local Firebase setup and try again."
+                }
+            ), 503
         return None
 
     @app.get("/")
@@ -94,13 +164,37 @@ def create_app(store: DemoStore | None = None) -> Flask:
 
     @app.get("/health")
     def health() -> Any:
-        return jsonify({
-            "status": "degraded" if store_state["store_error"] else "ok",
-            "mode": f"{current_store().backend_name}_demo",
-            "db_backend": current_store().backend_name,
-            "model_loaded": False,
-            "timezone": "Africa/Nairobi",
-        })
+        """Report readiness without exposing local paths or provider errors."""
+        ext = app.extensions["mushroom"]
+        db = ext["db"]
+        try:
+            if getattr(db, "name", "") == "firebase":
+                db.get("meta/healthcheck")
+            connected = getattr(db, "name", "") == "firebase"
+        except Exception:  # noqa: BLE001 - health data must not leak provider details.
+            connected = False
+        inference = ext["inference"]
+        return jsonify(
+            {
+                "status": "degraded"
+                if store_state["store_error"]
+                or db.name == "unavailable"
+                or (db.name == "firebase" and not connected)
+                else "ok",
+                "version": "1.0.0",
+                "mode": f"{current_store().backend_name}_demo",
+                "db_backend": db.name,
+                "firebase_connected": connected,
+                "auth_required": bool(runtime_settings.api_key),
+                "sms_enabled": False,
+                "email_enabled": False,
+                "model_loaded": inference.loaded,
+                "model_version": inference.version,
+                "model_synthetic": inference.synthetic,
+                "uptime_s": round(time.monotonic() - ext["started_at"]),
+                "timezone": runtime_settings.timezone,
+            }
+        )
 
     @app.get("/api/dashboard")
     def dashboard_data() -> Any:
@@ -108,23 +202,31 @@ def create_app(store: DemoStore | None = None) -> Flask:
             dashboard = current_store().get_dashboard()
         except Exception:  # noqa: BLE001 - keep provider details out of the API response and logs.
             LOGGER.error("Could not read presentation demo data")
-            return jsonify({"error": "Could not read the demo data. Check the Firebase connection and try again."}), 503
-        return jsonify({
-            "mode": f"{current_store().backend_name}_demo",
-            "backend": current_store().backend_name,
-            "notice": "Demo data — not connected to farm sensors.",
-            "timezone": "Africa/Nairobi",
-            "currency": "KES",
-            "thresholds": THRESHOLDS,
-            **dashboard,
-        })
+            return jsonify(
+                {
+                    "error": "Could not read the demo data. Check the Firebase connection and try again."
+                }
+            ), 503
+        return jsonify(
+            {
+                "mode": f"{current_store().backend_name}_demo",
+                "backend": current_store().backend_name,
+                "notice": "Demo data — not connected to farm sensors.",
+                "timezone": "Africa/Nairobi",
+                "currency": "KES",
+                "thresholds": THRESHOLDS,
+                **dashboard,
+            }
+        )
 
     @app.post("/api/simulate")
     def simulate_reading() -> Any:
         payload = request.get_json(silent=True)
         scenario = payload.get("scenario") if isinstance(payload, dict) else None
         if scenario not in SYNTHETIC_SCENARIOS:
-            return jsonify({"error": "Choose a demo reading: normal, warm, or dry."}), 400
+            return jsonify(
+                {"error": "Choose a demo reading: normal, warm, or dry."}
+            ), 400
 
         temperature, humidity = SYNTHETIC_SCENARIOS[scenario]
         now = datetime.now(UTC)
@@ -144,7 +246,11 @@ def create_app(store: DemoStore | None = None) -> Flask:
                 "level": "medium",
                 "status": "demo",
                 "location": "Room 1",
-                "message": (f"Example humidity is {humidity}% (below 80%)." if is_dry else f"Example temperature is {temperature} °C (above 26 °C)."),
+                "message": (
+                    f"Example humidity is {humidity}% (below 80%)."
+                    if is_dry
+                    else f"Example temperature is {temperature} °C (above 26 °C)."
+                ),
                 "timestamp": _timestamp(now),
                 "synthetic": True,
             }
@@ -152,7 +258,11 @@ def create_app(store: DemoStore | None = None) -> Flask:
             current_store().add_reading(reading, alert)
         except Exception:  # noqa: BLE001 - keep provider details out of the API response and logs.
             LOGGER.error("Could not save synthetic demonstration data")
-            return jsonify({"error": "Could not save this example. Check the Firebase setup and try again."}), 503
+            return jsonify(
+                {
+                    "error": "Could not save this example. Check the Firebase setup and try again."
+                }
+            ), 503
         return jsonify({"status": "synthetic_demo_reading_added", "reading": reading})
 
     @app.post("/api/demo/reset")
@@ -161,16 +271,26 @@ def create_app(store: DemoStore | None = None) -> Flask:
             current_store().reset()
         except Exception:  # noqa: BLE001 - keep provider details out of the API response and logs.
             LOGGER.error("Could not reset synthetic demonstration data")
-            return jsonify({"error": "Could not reset the examples. Check the Firebase setup and try again."}), 503
+            return jsonify(
+                {
+                    "error": "Could not reset the examples. Check the Firebase setup and try again."
+                }
+            ), 503
         return jsonify({"status": "synthetic_demo_reset"})
 
     @app.post("/api/predict")
     def predict() -> Any:
-        return jsonify({"error": "Photo checks are not active in this prototype. A trained, farm-reviewed model is required."}), 503
+        return jsonify(
+            {
+                "error": "Photo checks are not active in this prototype. A trained, farm-reviewed model is required."
+            }
+        ), 503
 
     @app.errorhandler(413)
     def too_large(_: Exception) -> Any:
-        return jsonify({"error": "That file is too large. Choose a file smaller than 8 MB."}), 413
+        return jsonify(
+            {"error": "That file is too large. Choose a file smaller than 8 MB."}
+        ), 413
 
     return app
 

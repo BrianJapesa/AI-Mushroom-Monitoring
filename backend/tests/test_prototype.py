@@ -1,9 +1,26 @@
 """Checks for the synthetic Kenyan-context prototype API and stores."""
+
+from dataclasses import replace
 from typing import Any
 
 import backend.app as app_module
 from backend.app import create_app
 from backend.database import FirebaseDemoStore, MemoryDemoStore
+from backend.mushroom.config import Settings
+from backend.mushroom.db import MemoryDB
+
+
+def make_app(**kwargs: Any) -> Any:
+    """Build isolated tests that cannot write to a configured Firebase project."""
+    settings = replace(
+        Settings.from_env(app_module.ENV_FILE, app_module.ROOT),
+        db_backend="memory",
+        firebase_url="",
+        api_key="",
+    )
+    return create_app(
+        store=MemoryDemoStore(), database=MemoryDB(), settings=settings, **kwargs
+    )
 
 
 class FakeReference:
@@ -38,7 +55,9 @@ class FakeReference:
             parent = self.state
             for part in self.path[:-1]:
                 parent = parent[part]
-            parent[self.path[-1]] = {str(index): value for index, value in enumerate(children)}
+            parent[self.path[-1]] = {
+                str(index): value for index, value in enumerate(children)
+            }
             children = self._node()
         key = f"item-{len(children) + 1}"
         reference = self.child(key)
@@ -52,24 +71,39 @@ def make_firebase_store(monkeypatch: Any) -> FirebaseDemoStore:
     fake_state: dict[str, Any] = {}
     reference = FakeReference(fake_state, ("demo",))
     firebase_app = object()
-    credential_module = type("Credentials", (), {"Certificate": staticmethod(lambda _: object())})
-    database_module = type("Database", (), {"reference": staticmethod(lambda *_args, **_kwargs: reference)})
-    admin_module = type("Admin", (), {
-        "credentials": credential_module,
-        "db": database_module,
-        "get_app": staticmethod(lambda _name: (_ for _ in ()).throw(ValueError("missing"))),
-        "initialize_app": staticmethod(lambda *_args, **_kwargs: firebase_app),
-    })
+    credential_module = type(
+        "Credentials", (), {"Certificate": staticmethod(lambda _: object())}
+    )
+    database_module = type(
+        "Database", (), {"reference": staticmethod(lambda *_args, **_kwargs: reference)}
+    )
+    admin_module = type(
+        "Admin",
+        (),
+        {
+            "credentials": credential_module,
+            "db": database_module,
+            "get_app": staticmethod(
+                lambda _name: (_ for _ in ()).throw(ValueError("missing"))
+            ),
+            "initialize_app": staticmethod(lambda *_args, **_kwargs: firebase_app),
+        },
+    )
     monkeypatch.setitem(__import__("sys").modules, "firebase_admin", admin_module)
-    monkeypatch.setitem(__import__("sys").modules, "firebase_admin.credentials", credential_module)
+    monkeypatch.setitem(
+        __import__("sys").modules, "firebase_admin.credentials", credential_module
+    )
     monkeypatch.setitem(__import__("sys").modules, "firebase_admin.db", database_module)
     from pathlib import Path
+
     monkeypatch.setattr(Path, "is_file", lambda _self: True)
-    return FirebaseDemoStore("https://example.firebaseio.com", Path("serviceAccountKey.json"))
+    return FirebaseDemoStore(
+        "https://example.firebaseio.com", Path("serviceAccountKey.json")
+    )
 
 
 def test_health_and_dashboard_are_local_demo() -> None:
-    client = create_app().test_client()
+    client = make_app().test_client()
 
     health = client.get("/health")
     page = client.get("/")
@@ -82,7 +116,7 @@ def test_health_and_dashboard_are_local_demo() -> None:
 
 
 def test_dashboard_values_are_marked_synthetic() -> None:
-    response = create_app().test_client().get("/api/dashboard")
+    response = make_app().test_client().get("/api/dashboard")
 
     assert response.status_code == 200
     assert response.json["backend"] == "memory"
@@ -93,7 +127,7 @@ def test_dashboard_values_are_marked_synthetic() -> None:
 
 
 def test_warm_scenario_adds_synthetic_alert() -> None:
-    client = create_app().test_client()
+    client = make_app().test_client()
 
     response = client.post("/api/simulate", json={"scenario": "warm"})
     dashboard = client.get("/api/dashboard").json
@@ -104,7 +138,7 @@ def test_warm_scenario_adds_synthetic_alert() -> None:
 
 
 def test_unknown_scenario_is_rejected_and_photo_model_is_not_faked() -> None:
-    client = create_app().test_client()
+    client = make_app().test_client()
 
     invalid = client.post("/api/simulate", json={"scenario": "unknown"})
     prediction = client.post("/api/predict")
@@ -115,7 +149,7 @@ def test_unknown_scenario_is_rejected_and_photo_model_is_not_faked() -> None:
 
 
 def test_reset_restores_initial_demo_records() -> None:
-    client = create_app().test_client()
+    client = make_app().test_client()
     client.post("/api/simulate", json={"scenario": "dry"})
 
     reset = client.post("/api/demo/reset")
@@ -129,21 +163,44 @@ def test_reset_restores_initial_demo_records() -> None:
 def test_firebase_store_seeds_and_reads_demo_records(monkeypatch: Any) -> None:
     store = make_firebase_store(monkeypatch)
     initial = store.get_dashboard()
-    store.add_reading({"temperature": 28.2, "humidity": 85.0, "synthetic": True, "timestamp": "2026-11-21T10:00:00+00:00"}, {"type": "Temperature example", "synthetic": True, "timestamp": "2026-11-21T10:00:00+00:00"})
+    store.add_reading(
+        {
+            "temperature": 28.2,
+            "humidity": 85.0,
+            "synthetic": True,
+            "timestamp": "2026-11-21T10:00:00+00:00",
+        },
+        {
+            "type": "Temperature example",
+            "synthetic": True,
+            "timestamp": "2026-11-21T10:00:00+00:00",
+        },
+    )
 
     updated = store.get_dashboard()
 
     assert len(initial["records"]) == 24
     assert len(updated["records"]) == 25
     assert updated["latest"]["temperature"] == 28.2
-    assert updated["alerts"][0]["id"] == "item-2"
+    assert any(
+        alert["type"] == "Temperature example" and alert["synthetic"] is True
+        for alert in updated["alerts"]
+    )
 
 
-def test_local_settings_reload_switches_database_backend(monkeypatch: Any, tmp_path: Any) -> None:
+def test_local_settings_reload_switches_database_backend(
+    monkeypatch: Any, tmp_path: Any
+) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("DB_BACKEND=memory\n", encoding="utf-8")
     monkeypatch.setattr(app_module, "ENV_FILE", env_file)
-    app = create_app()
+    settings = replace(
+        Settings.from_env(env_file, app_module.ROOT),
+        db_backend="memory",
+        firebase_url="",
+        api_key="",
+    )
+    app = create_app(database=MemoryDB(), settings=settings)
 
     class FirebaseLabelledMemoryStore(MemoryDemoStore):
         backend_name = "firebase"
