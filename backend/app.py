@@ -18,6 +18,7 @@ try:
     from .mushroom.config import Settings
     from .mushroom.db import Database
     from .mushroom.inference import InferenceService
+    from .mushroom.notifier import Notifier
     from .synthetic_demo_data import SYNTHETIC_SCENARIOS
 except ImportError:  # Support direct execution as python backend/app.py.
     from database import DemoStore, FirebaseDemoStore, MemoryDemoStore
@@ -25,6 +26,7 @@ except ImportError:  # Support direct execution as python backend/app.py.
     from mushroom.config import Settings
     from mushroom.db import Database
     from mushroom.inference import InferenceService
+    from mushroom.notifier import Notifier
     from synthetic_demo_data import SYNTHETIC_SCENARIOS
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -95,6 +97,7 @@ def create_app(
     database: Database | None = None,
     settings: Settings | None = None,
     inference: InferenceService | None = None,
+    notifier: Notifier | None = None,
 ) -> Flask:
     """Create the local presentation API with a memory or Firebase demo store."""
     app = Flask(__name__, static_folder=None)
@@ -124,6 +127,7 @@ def create_app(
         database=database,
         inference=inference,
         app=app,
+        notifier=notifier,
     )
 
     def current_store() -> DemoStore:
@@ -171,9 +175,15 @@ def create_app(
             if getattr(db, "name", "") == "firebase":
                 db.get("meta/healthcheck")
             connected = getattr(db, "name", "") == "firebase"
+            state = db.get("meta/state") or {}
+            last_sensor_ts = (
+                state.get("last_sensor_ts") if isinstance(state, dict) else None
+            )
         except Exception:  # noqa: BLE001 - health data must not leak provider details.
             connected = False
+            last_sensor_ts = None
         inference = ext["inference"]
+        delivery = ext["notifier"].health()
         return jsonify(
             {
                 "status": "degraded"
@@ -186,8 +196,17 @@ def create_app(
                 "db_backend": db.name,
                 "firebase_connected": connected,
                 "auth_required": bool(runtime_settings.api_key),
-                "sms_enabled": False,
-                "email_enabled": False,
+                "sms_enabled": delivery["sms_enabled"],
+                "email_enabled": delivery["email_enabled"],
+                "email_last_ok_ts": delivery["email_last_ok_ts"],
+                "email_last_error_class": delivery["email_last_error_class"],
+                "sms_last_ok_ts": delivery["sms_last_ok_ts"],
+                "sms_last_error_class": delivery["sms_last_error_class"],
+                "notification_failures": delivery["delivery_failures"],
+                "notification_queue_size": delivery["queue_size"],
+                "last_sensor_ts": last_sensor_ts,
+                "alert_monitor_running": ext["alerts"].monitor_running,
+                "demo_mode": True,
                 "model_loaded": inference.loaded,
                 "model_version": inference.version,
                 "model_synthetic": inference.synthetic,
@@ -299,5 +318,13 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    # Bind to loopback for a safe local presentation demo.
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    # Use a Windows-compatible production server, bound locally by default.
+    from waitress import serve
+
+    monitor = app.extensions["mushroom"]["alerts"]
+    monitor.start_monitor()
+    try:
+        serve(app, host="127.0.0.1", port=5000)
+    finally:
+        monitor.stop_monitor()
+        app.extensions["mushroom"]["notifier"].close()

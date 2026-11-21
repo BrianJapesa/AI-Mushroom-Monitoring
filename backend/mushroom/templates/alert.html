@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="{{ language }}">
+<body style="margin:0;background:#f3f6f2;font-family:Arial,sans-serif;color:#183027">
+  <main style="max-width:620px;margin:24px auto;background:#fff;border-radius:12px;overflow:hidden">
+    <header style="padding:22px;background:#174d37;color:#fff"><strong>{{ farm_name }}</strong><br><span>Oyster mushroom room monitor</span></header>
+    <section style="padding:24px">
+      <p style="display:inline-block;padding:8px 12px;border-radius:16px;background:#f5d56b;color:#241d07"><strong>{{ level_label }}</strong></p>
+      <h1 style="font-size:22px">{{ message }}</h1>
+      <p><strong>Where:</strong> {{ location }}</p>
+      <p><strong>Reading:</strong> {{ reading }}</p>
+      <p><strong>Time (Nairobi):</strong> {{ local_time }}</p>
+      <p><strong>What to do:</strong> {{ action }}</p>
+      <p><a href="{{ dashboard_url }}" style="display:inline-block;padding:12px 18px;background:#174d37;color:#fff;border-radius:6px;text-decoration:none">Open the dashboard</a></p>
+    </section>
+  </main>
+</body>
+</html>

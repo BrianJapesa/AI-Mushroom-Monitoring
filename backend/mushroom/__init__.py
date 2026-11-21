@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, request
+from flask import Flask, g, jsonify, request
 
 from .alerts import AlertEngine
 from .config import Settings
 from .db import Database, DatabaseUnavailable, FirebaseDB, MemoryDB
 from .inference import InferenceService
+from .logging_setup import configure_logging
+from .notifier import Notifier
 from .routes import api
 from .security import Security
 
@@ -26,8 +30,10 @@ def create_monitoring_app(
     database: Database | None = None,
     inference: InferenceService | None = None,
     app: Flask | None = None,
+    notifier: Notifier | None = None,
 ) -> Flask:
     """Build the secure API services and injectable dependencies for a run or test."""
+    configure_logging(root / "logs")
     settings = settings or Settings.from_env(root / "backend" / ".env", root)
     if database is None:
         try:
@@ -48,7 +54,8 @@ def create_monitoring_app(
         root / "backend" / "models" / "model_meta.json",
         settings.min_confidence,
     )
-    alerts = AlertEngine(database, settings)
+    notifier = notifier or Notifier(settings, database)
+    alerts = AlertEngine(database, settings, notify=notifier.enqueue)
     security = Security(settings.api_key, settings.cors_origins)
 
     app = app or Flask(__name__, static_folder=None)
@@ -58,6 +65,7 @@ def create_monitoring_app(
         "settings": settings,
         "inference": inference,
         "alerts": alerts,
+        "notifier": notifier,
         "started_at": time.monotonic(),
     }
     app.register_blueprint(api)
@@ -65,6 +73,12 @@ def create_monitoring_app(
     @app.before_request
     def protect_api() -> Any:
         """Protect API endpoints and allow browser preflight requests."""
+        incoming_id = request.headers.get("X-Request-ID", "")
+        g.request_id = (
+            incoming_id
+            if re.fullmatch(r"[A-Za-z0-9-]{1,64}", incoming_id)
+            else uuid.uuid4().hex
+        )
         if request.method == "OPTIONS":
             return ("", 204)
         return security.before_request()
@@ -72,6 +86,7 @@ def create_monitoring_app(
     @app.after_request
     def add_response_headers(response: Any) -> Any:
         """Add configured CORS and browser security headers."""
+        response.headers["X-Request-ID"] = g.request_id
         return security.security_headers(security.cors_headers(response))
 
     @app.errorhandler(413)
@@ -92,8 +107,8 @@ def create_monitoring_app(
         ), 503
 
     @app.errorhandler(500)
-    def server_error(_: Exception) -> Any:
-        LOGGER.exception("Unhandled monitoring service error")
+    def server_error(error: Exception) -> Any:
+        LOGGER.error("Unhandled monitoring service error (%s)", type(error).__name__)
         return jsonify(
             {"error": "The monitoring service had a problem. Try again."}
         ), 500
@@ -111,7 +126,7 @@ class UnavailableDB:
 
     @staticmethod
     def _fail(*_args: Any, **_kwargs: Any) -> Any:
-        raise RuntimeError("Database is not available.")
+        raise DatabaseUnavailable("Database is not available.")
 
     get = _fail
     set = _fail

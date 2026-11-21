@@ -15,6 +15,8 @@ class Database(Protocol):
     def get(self, path: str) -> Any: ...
     def set(self, path: str, value: Any) -> None: ...
     def push(self, path: str, value: dict[str, Any]) -> str: ...
+    def new_key(self, path: str) -> str: ...
+    def update(self, values: dict[str, Any]) -> None: ...
     def delete(self, path: str) -> None: ...
     def query(self, path: str, limit: int = 100) -> list[dict[str, Any]]: ...
 
@@ -52,36 +54,55 @@ class MemoryDB:
 
     def push(self, path: str, value: dict[str, Any]) -> str:
         """Append a record using deterministic local keys for repeatable tests."""
+        key = self.new_key(path)
+        self.set(f"{path}/{key}", value)
+        return key
+
+    def new_key(self, path: str) -> str:
+        """Reserve a deterministic append key without changing stored data."""
+        _parts(path)
         with self._lock:
             self._counter += 1
-            key = f"local-{self._counter:08d}"
-            _write(self._data, f"{path}/{key}", deepcopy(value))
-            return key
+            return f"local-{self._counter:08d}"
+
+    def update(self, values: dict[str, Any]) -> None:
+        """Apply several paths atomically to the in-memory document tree."""
+        with self._lock:
+            candidate = deepcopy(self._data)
+            for path, value in values.items():
+                if value is None:
+                    _delete(candidate, path)
+                else:
+                    _write(candidate, path, deepcopy(value))
+            self._data = candidate
 
     def delete(self, path: str) -> None:
         """Remove one database path if it exists."""
         with self._lock:
-            parts = _parts(path)
-            parent = (
-                _read(self._data, "/".join(parts[:-1]))
-                if len(parts) > 1
-                else self._data
-            )
-            if isinstance(parent, dict):
-                parent.pop(parts[-1], None)
+            _delete(self._data, path)
 
     def query(self, path: str, limit: int = 100) -> list[dict[str, Any]]:
         """Return newest records first, matching Realtime Database UI semantics."""
-        values = _read(self._data, path)
+        with self._lock:
+            values = deepcopy(_read(self._data, path))
         if isinstance(values, dict):
-            records = [item for item in values.values() if isinstance(item, dict)]
+            records = [
+                (str(key), item)
+                for key, item in values.items()
+                if isinstance(item, dict)
+            ]
         elif isinstance(values, list):
-            records = [item for item in values if isinstance(item, dict)]
+            records = [
+                (str(index), item)
+                for index, item in enumerate(values)
+                if isinstance(item, dict)
+            ]
         else:
             records = []
-        records.reverse()
-        records.sort(key=lambda item: str(item.get("timestamp", "")), reverse=True)
-        return deepcopy(records[: max(1, min(limit, 500))])
+        records.sort(
+            key=lambda pair: (str(pair[1].get("timestamp", "")), pair[0]), reverse=True
+        )
+        return deepcopy([item for _key, item in records[: max(0, min(limit, 500))]])
 
 
 class FirebaseDB:
@@ -123,6 +144,15 @@ class FirebaseDB:
         """Append a record and return Firebase's generated child key."""
         return str(self._call(lambda: self._reference(path).push(value).key))
 
+    def new_key(self, path: str) -> str:
+        """Create a Firebase push ID locally without writing a value."""
+        return str(self._call(lambda: self._reference(path).push().key))
+
+    def update(self, values: dict[str, Any]) -> None:
+        """Commit validated relative paths in one Firebase multi-location update."""
+        updates = {"/".join(_parts(path)): value for path, value in values.items()}
+        self._call(lambda: self._root.update(updates))
+
     def delete(self, path: str) -> None:
         """Remove one validated path from Firebase."""
         self._call(lambda: self._reference(path).delete())
@@ -130,17 +160,24 @@ class FirebaseDB:
     def query(self, path: str, limit: int = 100) -> list[dict[str, Any]]:
         """Return newest records first from Firebase query results."""
         value = self._call(lambda: self._reference(path).get()) or {}
-        records = (
-            list(value.values())
-            if isinstance(value, dict)
-            else value
-            if isinstance(value, list)
-            else []
+        if isinstance(value, dict):
+            records = [
+                (str(key), item)
+                for key, item in value.items()
+                if isinstance(item, dict)
+            ]
+        elif isinstance(value, list):
+            records = [
+                (str(index), item)
+                for index, item in enumerate(value)
+                if isinstance(item, dict)
+            ]
+        else:
+            records = []
+        records.sort(
+            key=lambda pair: (str(pair[1].get("timestamp", "")), pair[0]), reverse=True
         )
-        result = [item for item in records if isinstance(item, dict)]
-        result.reverse()
-        result.sort(key=lambda item: str(item.get("timestamp", "")), reverse=True)
-        return result[: max(1, min(limit, 500))]
+        return [item for _key, item in records[: max(0, min(limit, 500))]]
 
     def _reference(self, path: str) -> Any:
         """Resolve and validate a relative database path."""
@@ -164,7 +201,11 @@ class FirebaseDB:
 def _parts(path: str) -> list[str]:
     """Reject Firebase-reserved key characters before resolving a path."""
     parts = [part for part in path.strip("/").split("/") if part]
-    if not parts or any(any(char in part for char in ".$#[]") for part in parts):
+    if not parts or any(
+        any(char in part for char in ".$#[]")
+        or any(ord(char) < 32 or ord(char) == 127 for char in part)
+        for part in parts
+    ):
         raise ValueError("Database path contains an invalid key.")
     if any(len(part) > 128 for part in parts):
         raise ValueError("Database path key is too long.")
@@ -189,3 +230,14 @@ def _write(root: dict[str, Any], path: str, value: Any) -> None:
             raise TypeError("Database path conflicts with an existing value.")
         node = child
     node[parts[-1]] = value
+
+
+def _delete(root: dict[str, Any], path: str) -> None:
+    """Delete one nested key, matching Firebase null-in-update behavior."""
+    parts = _parts(path)
+    node: Any = root
+    for part in parts[:-1]:
+        node = node.get(part) if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            return
+    node.pop(parts[-1], None)

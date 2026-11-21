@@ -33,8 +33,21 @@ class Settings:
     sensor_stale_minutes: int
     smtp_user: str
     smtp_password: str
+    smtp_host: str
+    smtp_port: int
+    smtp_security: str
+    email_from_name: str
+    email_reply_to: str
+    alert_emails: tuple[str, ...]
+    email_daily_cap: int
+    dashboard_url: str
+    alert_language: str
     twilio_account_sid: str
     twilio_auth_token: str
+    twilio_from: str
+    alert_phones: tuple[str, ...]
+    farm_name: str
+    retention_days_records: int
 
     @classmethod
     def from_env(cls, env_file: Path, root: Path) -> Settings:
@@ -87,8 +100,23 @@ class Settings:
             sensor_stale_minutes=_integer("SENSOR_STALE_MIN", 10),
             smtp_user=os.getenv("SMTP_USER", "").strip(),
             smtp_password=os.getenv("SMTP_PASS", ""),
+            smtp_host=os.getenv("SMTP_HOST", "smtp.gmail.com").strip(),
+            smtp_port=_integer("SMTP_PORT", 465),
+            smtp_security=os.getenv("SMTP_SECURITY", "ssl").strip().lower(),
+            email_from_name=os.getenv(
+                "EMAIL_FROM_NAME", "Japesa Farms Monitor"
+            ).strip(),
+            email_reply_to=os.getenv("EMAIL_REPLY_TO", "").strip(),
+            alert_emails=_list_setting("ALERT_EMAILS", "ALERT_EMAIL"),
+            email_daily_cap=_integer("EMAIL_DAILY_CAP", 100),
+            dashboard_url=os.getenv("DASHBOARD_URL", "http://127.0.0.1:5000/").strip(),
+            alert_language=os.getenv("ALERT_LANGUAGE", "en").strip().lower(),
             twilio_account_sid=os.getenv("TWILIO_SID", "").strip(),
             twilio_auth_token=os.getenv("TWILIO_TOKEN", ""),
+            twilio_from=os.getenv("TWILIO_FROM", "").strip(),
+            alert_phones=_list_setting("ALERT_PHONES", "ALERT_PHONE"),
+            farm_name=os.getenv("FARM_NAME", "Japesa Farms").strip(),
+            retention_days_records=_integer("RETENTION_DAYS_RECORDS", 0),
         )
         if (
             settings.temp_min >= settings.temp_max
@@ -106,6 +134,20 @@ class Settings:
             raise ValueError("Cooldown and upload size settings must be positive.")
         if not 0.0 <= settings.min_confidence <= 1.0:
             raise ValueError("MIN_CONFIDENCE must be between 0 and 1.")
+        if settings.smtp_security not in {"ssl", "starttls"}:
+            raise ValueError("SMTP_SECURITY must be ssl or starttls.")
+        if settings.smtp_port not in {465, 587} or settings.email_daily_cap < 1:
+            raise ValueError(
+                "SMTP_PORT must be 465 or 587 and EMAIL_DAILY_CAP must be positive."
+            )
+        if (settings.smtp_security == "ssl" and settings.smtp_port != 465) or (
+            settings.smtp_security == "starttls" and settings.smtp_port != 587
+        ):
+            raise ValueError("Use SSL with port 465 or STARTTLS with port 587.")
+        if settings.alert_language not in {"en", "sw"}:
+            raise ValueError("ALERT_LANGUAGE must be en or sw.")
+        if settings.retention_days_records < 0:
+            raise ValueError("RETENTION_DAYS_RECORDS cannot be negative.")
         return settings
 
 
@@ -132,3 +174,9 @@ def _integer(name: str, default: int) -> int:
         return int(value)
     except ValueError as exc:
         raise ValueError(f"{name} must be a whole number.") from exc
+
+
+def _list_setting(primary: str, legacy: str) -> tuple[str, ...]:
+    """Read a comma-separated setting and fall back to a legacy single value."""
+    value = os.getenv(primary, "").strip() or os.getenv(legacy, "").strip()
+    return tuple(item.strip() for item in value.split(",") if item.strip())

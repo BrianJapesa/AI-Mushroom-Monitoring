@@ -1,0 +1,9 @@
+{{ farm_name }} — oyster mushroom monitor
+
+{{ level_label }}: {{ message }}
+Where: {{ location }}
+Reading: {{ reading }}
+Time (Nairobi): {{ local_time }}
+What to do: {{ action }}
+
+Dashboard: {{ dashboard_url }}

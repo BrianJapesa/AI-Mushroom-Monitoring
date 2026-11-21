@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import csv
+import hmac
 import io
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -13,6 +15,7 @@ from flask import Blueprint, Response, jsonify, request, stream_with_context
 from .security import clean_text, finite_number
 
 api = Blueprint("monitoring_api", __name__)
+LOGGER = logging.getLogger(__name__)
 BAG_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
@@ -106,6 +109,9 @@ def sensor() -> Any:
         return _error("Temperature must be a number between -40 and 85 °C.", 400)
     if not finite_number(humidity) or not 0 <= humidity <= 100:
         return _error("Humidity must be a number between 0 and 100%.", 400)
+    synthetic = data.get("synthetic", False)
+    if not isinstance(synthetic, bool):
+        return _error("The synthetic marker must be true or false.", 400)
     room = clean_text(data.get("room", "Room 1"), 20)
     device_id = clean_text(data.get("device_id", "unknown"), 64)
     if room is None or device_id is None or any(char in room for char in ".$#[]/"):
@@ -118,14 +124,16 @@ def sensor() -> Any:
         "device_id": device_id,
         "timestamp": timestamp,
     }
+    if synthetic:
+        reading["synthetic"] = True
+    record = {"temp": reading["temperature"], "hum": reading["humidity"], **reading}
     try:
-        database.set("sensors/latest", reading)
-        database.push(
-            "records",
-            {"temp": reading["temperature"], "hum": reading["humidity"], **reading},
+        record_key = database.new_key("records")
+        alerts = current_app_alert_engine().process_reading(
+            reading, f"records/{record_key}", record
         )
-        alerts = current_app_alert_engine().process_reading(reading)
-    except Exception:  # noqa: BLE001 - database SDK errors vary; keep them out of responses.
+    except Exception as exc:  # noqa: BLE001 - database SDK errors vary; keep them out of responses.
+        LOGGER.error("Sensor transaction failed (%s)", type(exc).__name__)
         return _error(
             "The reading could not be saved. Check the database connection and try again.",
             503,
@@ -144,6 +152,13 @@ def current_app_alert_engine() -> Any:
     from flask import current_app
 
     return current_app.extensions["mushroom"]["alerts"]
+
+
+def current_app_notifier() -> Any:
+    """Fetch the configured notification service from Flask extensions."""
+    from flask import current_app
+
+    return current_app.extensions["mushroom"]["notifier"]
 
 
 @api.post("/predict")
@@ -191,35 +206,12 @@ def predict() -> Any:
     timestamp = _now()
     bag = {"id": bag_id, "room": room, "timestamp": timestamp, **result}
     try:
-        previous = database.get(f"bags/{bag_id}") or {}
-        database.set(f"bags/{bag_id}", bag)
-        database.push(f"bag_history/{bag_id}", bag)
-        if result["status"] in {"suspect", "contaminated"}:
-            alert = {
-                "type": "contamination",
-                "message": f"Bag {bag_id} needs a staff check.",
-                "location": f"{room} · {bag_id}",
-                "level": "high" if result["status"] == "contaminated" else "med",
-                "status": "open" if result["status"] == "contaminated" else "review",
-                "timestamp": timestamp,
-                "notified": False,
-            }
-            if previous.get("status") != result["status"]:
-                database.push("alerts", alert)
-        elif previous.get("status") in {"suspect", "contaminated"}:
-            database.push(
-                "alerts",
-                {
-                    "type": "contamination-recovered",
-                    "message": f"Bag {bag_id} was classified healthy. Staff review is recommended.",
-                    "location": f"{room} · {bag_id}",
-                    "level": "low",
-                    "status": "resolved",
-                    "timestamp": timestamp,
-                    "notified": False,
-                },
-            )
-    except Exception:  # noqa: BLE001 - database SDK errors vary; keep them out of responses.
+        history_key = database.new_key(f"bag_history/{bag_id}")
+        current_app_alert_engine().process_prediction(
+            bag, f"bag_history/{bag_id}/{history_key}"
+        )
+    except Exception as exc:  # noqa: BLE001 - database SDK errors vary; keep them out of responses.
+        LOGGER.error("Bag result transaction failed (%s)", type(exc).__name__)
         return _error(
             "The photo result could not be saved. Check the database connection and try again.",
             503,
@@ -243,7 +235,7 @@ def _magic_matches(mime_type: str, content: bytes) -> bool:
 @api.post("/alert")
 def manual_alert() -> Any:
     """Accept a short, validated message from an external system."""
-    database, _settings, _inference = _services()
+    _database, _settings, _inference = _services()
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return _error("Send a JSON object with a message.", 400)
@@ -259,35 +251,42 @@ def manual_alert() -> Any:
     location = clean_text(data.get("location", "Farm"), 80)
     if alert_type is None or location is None:
         return _error("Alert type and location must be short plain text.", 400)
-    timestamp = _now()
-    cooldown = _services()[1].alert_cooldown_seconds
-    duplicate = next(
-        (
-            item
-            for item in database.query("alerts", 500)
-            if item.get("type") == alert_type
-            and item.get("location") == location
-            and item.get("status") in {"open", "review"}
-            and (
-                datetime.now(UTC) - _timestamp_or_oldest(item.get("timestamp"))
-            ).total_seconds()
-            < cooldown
-        ),
-        None,
-    )
-    if duplicate:
-        return jsonify({"status": "suppressed", "timestamp": timestamp})
     alert = {
         "type": alert_type,
         "message": message,
         "location": location,
         "level": level,
         "status": "open",
-        "timestamp": timestamp,
+        "timestamp": _now(),
         "notified": False,
     }
-    database.push("alerts", alert)
-    return jsonify({"status": "queued", "timestamp": alert["timestamp"]})
+    try:
+        queued = current_app_alert_engine().create_manual_alert(alert)
+    except Exception as exc:  # noqa: BLE001 - database exceptions must stay generic.
+        LOGGER.error("Manual alert transaction failed (%s)", type(exc).__name__)
+        return _error(
+            "The alert could not be saved. Check the database connection and try again.",
+            503,
+        )
+    return jsonify(
+        {"status": "queued" if queued else "suppressed", "timestamp": _now()}
+    )
+
+
+@api.post("/admin/test-notification")
+def test_notification() -> Any:
+    """Queue only fixed test text after explicit API-key authentication."""
+    _database, settings, _inference = _services()
+    supplied = request.headers.get("X-API-Key", "")
+    if not settings.api_key or not hmac.compare_digest(supplied, settings.api_key):
+        return _error("Set up the API key before sending a notification test.", 401)
+    data = request.get_json(silent=True)
+    channel = data.get("channel") if isinstance(data, dict) else None
+    if channel not in {"email", "sms", "both"}:
+        return _error("Choose email, sms, or both for the test.", 400)
+    channels = ("email", "sms") if channel == "both" else (channel,)
+    results = current_app_notifier().send_test(channels)
+    return jsonify({"status": "complete", "channels": results})
 
 
 @api.get("/sensors/latest")

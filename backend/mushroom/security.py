@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import math
 import time
@@ -35,8 +36,19 @@ class Security:
             supplied = request.headers.get("X-API-Key", "")
             if not supplied or not hmac.compare_digest(supplied, self.api_key):
                 return jsonify({"error": "API key is missing or incorrect."}), 401
-        limit = 10 if request.path in {"/predict", "/api/predict"} else 60
-        identity = request.headers.get("X-API-Key") or request.remote_addr or "local"
+        limit = (
+            2
+            if request.path == "/admin/test-notification"
+            else 10
+            if request.path in {"/predict", "/api/predict"}
+            else 60
+        )
+        supplied_key = request.headers.get("X-API-Key", "")
+        identity = (
+            hashlib.sha256(supplied_key.encode("utf-8")).hexdigest()
+            if supplied_key
+            else request.remote_addr or "local"
+        )
         if not self._allow(f"{request.path}:{identity}", limit):
             return jsonify(
                 {"error": "Too many requests. Wait a minute and try again."}
