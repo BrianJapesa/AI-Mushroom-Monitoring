@@ -7,6 +7,7 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from dotenv import load_dotenv
@@ -19,7 +20,7 @@ try:
     from .mushroom.db import Database
     from .mushroom.inference import InferenceService
     from .mushroom.notifier import Notifier
-    from .synthetic_demo_data import SYNTHETIC_SCENARIOS
+    from .mushroom.security import clean_text, finite_number
 except ImportError:  # Support direct execution as python backend/app.py.
     from database import DemoStore, FirebaseDemoStore, MemoryDemoStore
     from mushroom import create_monitoring_app
@@ -27,7 +28,7 @@ except ImportError:  # Support direct execution as python backend/app.py.
     from mushroom.db import Database
     from mushroom.inference import InferenceService
     from mushroom.notifier import Notifier
-    from synthetic_demo_data import SYNTHETIC_SCENARIOS
+    from mushroom.security import clean_text, finite_number
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT / "backend" / ".env"
@@ -38,6 +39,12 @@ THRESHOLDS = {
     "temperature_max": 26.0,
     "humidity_min": 80.0,
     "humidity_max": 90.0,
+}
+DEMO_TARGET_LIMITS = {
+    "temperature_min": (-40.0, 84.0),
+    "temperature_max": (-39.0, 84.0),
+    "humidity_min": (1.0, 99.0),
+    "humidity_max": (2.0, 100.0),
 }
 
 
@@ -83,6 +90,24 @@ def _server_bind_options() -> tuple[str, int]:
     return os.getenv("HOST", "127.0.0.1"), int(os.getenv("PORT", "5000"))
 
 
+def _validated_demo_thresholds(value: Any) -> dict[str, float] | None:
+    """Accept only complete finite target ranges within safe sensor bounds."""
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, float] = {}
+    for key, (minimum, maximum) in DEMO_TARGET_LIMITS.items():
+        number = value.get(key)
+        if not finite_number(number) or not minimum <= number <= maximum:
+            return None
+        result[key] = float(number)
+    if (
+        result["temperature_min"] >= result["temperature_max"]
+        or result["humidity_min"] >= result["humidity_max"]
+    ):
+        return None
+    return result
+
+
 class UnavailableDemoStore:
     """Preserve app startup while avoiding fake fallback data on Firebase errors."""
 
@@ -126,6 +151,8 @@ def create_app(
         "store_error": store_error,
         "fixed_store": store is not None,
     }
+    demo_target_lock = Lock()
+    demo_targets = dict(THRESHOLDS)
     create_monitoring_app(
         ROOT,
         settings=runtime_settings,
@@ -138,6 +165,53 @@ def create_app(
     def current_store() -> DemoStore:
         """Return the currently active storage adapter."""
         return store_state["store"]
+
+    def current_demo_targets() -> dict[str, float]:
+        """Return a thread-safe copy of this app's adjustable demo targets."""
+        with demo_target_lock:
+            return dict(demo_targets)
+
+    def make_alert(
+        reading: dict[str, Any], targets: dict[str, float]
+    ) -> dict[str, Any] | None:
+        """Build a clearly synthetic alert when a demo reading is outside targets."""
+        violations = []
+        temperature = reading["temperature"]
+        humidity = reading["humidity"]
+        if temperature < targets["temperature_min"]:
+            violations.append(
+                f"temperature {temperature:g} °C is below {targets['temperature_min']:g} °C"
+            )
+        elif temperature > targets["temperature_max"]:
+            violations.append(
+                f"temperature {temperature:g} °C is above {targets['temperature_max']:g} °C"
+            )
+        if humidity < targets["humidity_min"]:
+            violations.append(
+                f"humidity {humidity:g}% is below {targets['humidity_min']:g}%"
+            )
+        elif humidity > targets["humidity_max"]:
+            violations.append(
+                f"humidity {humidity:g}% is above {targets['humidity_max']:g}%"
+            )
+        if not violations:
+            return None
+        alert_type = (
+            "Temperature example"
+            if violations[0].startswith("temperature")
+            else "Humidity example"
+        )
+        return {
+            "type": alert_type,
+            "level": "medium",
+            "status": "demo",
+            "location": reading["room"],
+            "message": "Example reading is outside the saved targets: "
+            + "; ".join(violations)
+            + ".",
+            "timestamp": reading["timestamp"],
+            "synthetic": True,
+        }
 
     @app.before_request
     def reload_local_database_settings() -> Any:
@@ -238,7 +312,7 @@ def create_app(
                 "notice": "Demo data — not connected to farm sensors.",
                 "timezone": "Africa/Nairobi",
                 "currency": "KES",
-                "thresholds": THRESHOLDS,
+                "thresholds": current_demo_targets(),
                 **dashboard,
             }
         )
@@ -247,12 +321,18 @@ def create_app(
     def simulate_reading() -> Any:
         payload = request.get_json(silent=True)
         scenario = payload.get("scenario") if isinstance(payload, dict) else None
-        if scenario not in SYNTHETIC_SCENARIOS:
+        if scenario not in {"normal", "warm", "dry"}:
             return jsonify(
                 {"error": "Choose a demo reading: normal, warm, or dry."}
             ), 400
 
-        temperature, humidity = SYNTHETIC_SCENARIOS[scenario]
+        targets = current_demo_targets()
+        temperature = (targets["temperature_min"] + targets["temperature_max"]) / 2
+        humidity = (targets["humidity_min"] + targets["humidity_max"]) / 2
+        if scenario == "warm":
+            temperature = targets["temperature_max"] + 1
+        elif scenario == "dry":
+            humidity = targets["humidity_min"] - 1
         now = datetime.now(UTC)
         reading = {
             "temperature": temperature,
@@ -262,22 +342,7 @@ def create_app(
             "timestamp": _timestamp(now),
             "synthetic": True,
         }
-        alert = None
-        if scenario != "normal":
-            is_dry = scenario == "dry"
-            alert = {
-                "type": "Humidity example" if is_dry else "Temperature example",
-                "level": "medium",
-                "status": "demo",
-                "location": "Room 1",
-                "message": (
-                    f"Example humidity is {humidity}% (below 80%)."
-                    if is_dry
-                    else f"Example temperature is {temperature} °C (above 26 °C)."
-                ),
-                "timestamp": _timestamp(now),
-                "synthetic": True,
-            }
+        alert = make_alert(reading, targets)
         try:
             current_store().add_reading(reading, alert)
         except Exception:  # noqa: BLE001 - keep provider details out of the API response and logs.
@@ -288,6 +353,68 @@ def create_app(
                 }
             ), 503
         return jsonify({"status": "synthetic_demo_reading_added", "reading": reading})
+
+    @app.post("/api/thresholds")
+    def update_demo_thresholds() -> Any:
+        """Save adjustable targets for this running demo process."""
+        targets = _validated_demo_thresholds(request.get_json(silent=True))
+        if targets is None:
+            return jsonify(
+                {
+                    "error": "Enter valid target ranges. Temperature must be -40 to 84 °C and humidity 0 to 100%, with each minimum below its maximum."
+                }
+            ), 400
+        with demo_target_lock:
+            demo_targets.clear()
+            demo_targets.update(targets)
+        return jsonify(
+            {"status": "demo_targets_updated", "thresholds": targets, "synthetic": True}
+        )
+
+    @app.post("/api/demo/reading")
+    def add_custom_demo_reading() -> Any:
+        """Add a user-entered synthetic reading to the presentation demo store."""
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(
+                {"error": "Enter a temperature and humidity for the demo reading."}
+            ), 400
+        temperature, humidity = payload.get("temperature"), payload.get("humidity")
+        room = clean_text(payload.get("room", "Room 1"), 30)
+        if not finite_number(temperature) or not -40 <= temperature <= 85:
+            return jsonify(
+                {"error": "Temperature must be a number from -40 to 85 °C."}
+            ), 400
+        if not finite_number(humidity) or not 0 <= humidity <= 100:
+            return jsonify({"error": "Humidity must be a number from 0 to 100%."}), 400
+        if room is None:
+            return jsonify({"error": "Room name must be 1 to 30 characters."}), 400
+        now = datetime.now(UTC)
+        reading = {
+            "temperature": float(temperature),
+            "humidity": float(humidity),
+            "room": room,
+            "device_id": "SYNTHETIC-DEMO-SENSOR",
+            "timestamp": _timestamp(now),
+            "synthetic": True,
+        }
+        alert = make_alert(reading, current_demo_targets())
+        try:
+            current_store().add_reading(reading, alert)
+        except Exception:  # noqa: BLE001 - keep provider details out of the API response and logs.
+            LOGGER.error("Could not save synthetic demonstration data")
+            return jsonify(
+                {
+                    "error": "Could not save this example. Check the Firebase setup and try again."
+                }
+            ), 503
+        return jsonify(
+            {
+                "status": "synthetic_demo_reading_added",
+                "reading": reading,
+                "alert": alert,
+            }
+        )
 
     @app.post("/api/demo/reset")
     def reset_demo() -> Any:
@@ -300,6 +427,9 @@ def create_app(
                     "error": "Could not reset the examples. Check the Firebase setup and try again."
                 }
             ), 503
+        with demo_target_lock:
+            demo_targets.clear()
+            demo_targets.update(THRESHOLDS)
         return jsonify({"status": "synthetic_demo_reset"})
 
     @app.post("/api/predict")

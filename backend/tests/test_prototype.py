@@ -144,6 +144,84 @@ def test_warm_scenario_adds_synthetic_alert() -> None:
     assert any(alert["type"] == "Temperature example" for alert in dashboard["alerts"])
 
 
+def test_demo_targets_are_adjustable_and_drive_scenario_values() -> None:
+    client = make_app().test_client()
+    targets = {
+        "temperature_min": 18,
+        "temperature_max": 24,
+        "humidity_min": 70,
+        "humidity_max": 88,
+    }
+
+    saved = client.post("/api/thresholds", json=targets)
+    warm = client.post("/api/simulate", json={"scenario": "warm"})
+    dashboard = client.get("/api/dashboard").json
+
+    assert saved.status_code == 200
+    assert dashboard["thresholds"] == targets
+    assert warm.json["reading"]["temperature"] == 25
+    assert any("above 24" in alert["message"] for alert in dashboard["alerts"])
+
+
+def test_custom_demo_reading_is_stored_and_checked_against_targets() -> None:
+    client = make_app().test_client()
+
+    response = client.post(
+        "/api/demo/reading",
+        json={"temperature": 29.5, "humidity": 72, "room": "Lucky Summer Room"},
+    )
+    dashboard = client.get("/api/dashboard").json
+
+    assert response.status_code == 200
+    assert response.json["reading"]["synthetic"] is True
+    assert response.json["reading"]["room"] == "Lucky Summer Room"
+    assert dashboard["latest"]["temperature"] == 29.5
+    assert any("above 26" in alert["message"] for alert in dashboard["alerts"])
+
+
+def test_invalid_demo_target_and_custom_reading_are_rejected() -> None:
+    client = make_app().test_client()
+
+    invalid_targets = client.post(
+        "/api/thresholds",
+        json={
+            "temperature_min": 26,
+            "temperature_max": 22,
+            "humidity_min": 80,
+            "humidity_max": 90,
+        },
+    )
+    invalid_reading = client.post(
+        "/api/demo/reading", json={"temperature": 24, "humidity": 120, "room": "Room 1"}
+    )
+
+    assert invalid_targets.status_code == 400
+    assert invalid_reading.status_code == 400
+
+
+def test_demo_reset_restores_default_targets() -> None:
+    client = make_app().test_client()
+    client.post(
+        "/api/thresholds",
+        json={
+            "temperature_min": 18,
+            "temperature_max": 24,
+            "humidity_min": 70,
+            "humidity_max": 88,
+        },
+    )
+
+    reset = client.post("/api/demo/reset")
+
+    assert reset.status_code == 200
+    assert client.get("/api/dashboard").json["thresholds"] == {
+        "temperature_min": 22.0,
+        "temperature_max": 26.0,
+        "humidity_min": 80.0,
+        "humidity_max": 90.0,
+    }
+
+
 def test_unknown_scenario_is_rejected_and_photo_model_is_not_faked() -> None:
     client = make_app().test_client()
 
