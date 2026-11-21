@@ -1,57 +1,43 @@
-# 🍄 AI-Based Smart Monitoring System for Oyster Mushroom Cultivation
+# AI Mushroom Monitor — Prototype
 
 **Author:** Brian Otieno Odhiambo  
 **Supervisor:** Fredrick Omondi  
 **Organization:** Japesa Farms & Agriculture Ltd  
-**Course:** Bachelor of Science in Data Science  
+**Course:** Bachelor of Science in Data Science
 
----
+## What this prototype shows
 
-## 📖 Overview
-The **AI-Based Smart Monitoring System** is an end-to-end IoT and Machine Learning solution designed to modernize oyster mushroom farming. By combining real-time environmental sensors, computer vision, and cloud databases, this system empowers farmers to transition from manual, error-prone inspection to automated, data-driven farm management.
+A local dashboard for a Kenyan oyster mushroom farm. It displays example room readings, a 24-hour trend, sample alerts, and sample bag checks. Buttons add synthetic normal, warm-room, or low-humidity readings. The dashboard shows Nairobi local time (EAT, UTC+3) and includes English and Kiswahili labels.
 
----
+**Every displayed reading and bag check is synthetic demo data.** The prototype is not connected to farm sensors or Firebase. It does not send email or SMS. Photo AI is intentionally inactive because no labeled farm photos or trained model were supplied.
 
-## ❗ The Problem It Solves
-Oyster mushrooms are highly sensitive to their environment. Traditional farming methods rely heavily on manual checks, which lead to several critical issues:
-* **Late Detection:** Contamination (like mold) is often discovered too late, resulting in massive yield losses.
-* **Inconsistent Monitoring:** Manual temperature and humidity checks are tedious and prone to human error.
-* **Lack of Data:** Without historical data, farmers cannot identify trends or optimize growing conditions over time.
+## Run on Windows
 
-**Our Solution:** This system automates the monitoring process. It continuously tracks temperature and humidity, uses AI to detect early signs of contamination via camera images, and alerts the farmer immediately before losses occur.
+Python 3.10–3.12 is required. This repository already has a Python 3.11 virtual environment in `.venv`.
 
----
+In PowerShell, from the repository folder:
 
-## 🛠️ Technologies Used
-This project utilizes a modern, scalable tech stack:
+```powershell
+.\.venv\Scripts\python.exe backend\app.py
+```
 
-* **Hardware/IoT:** ESP32 Microcontroller, DHT22 Temperature & Humidity Sensor, Camera Module
-* **Backend & Database:** Python, Flask, Firebase Realtime Database (Cloud)
-* **Machine Learning:** TensorFlow, Keras, OpenCV (Convolutional Neural Networks for image classification)
-* **Frontend / Dashboard:** Streamlit, Plotly, Pandas
-* **Notifications:** Twilio API (SMS), SMTP (Email)
+Then open `http://127.0.0.1:5000/`. Or run `scripts\prototype.ps1` to start the backend hidden and open the dashboard. Stop it by closing the process from Task Manager or use Ctrl+C if started directly in PowerShell.
 
----
+The prototype keeps data in memory, so simulated readings reset when the app restarts. It binds to this PC only. Do not use it as a production farm monitor.
 
-## ⚙️ Features
-* **Real-time Environmental Monitoring:** Live tracking of temperature and humidity.
-* **AI Contamination Detection:** Upload a photo of a mushroom bag, and the AI will classify it as Healthy, Suspect, or Contaminated.
-* **Automated Alerts:** Instant SMS and Email notifications when temperature spikes, humidity drops, or contamination is detected.
-* **Cloud Database:** All historical data is securely logged in Firebase.
-* **Interactive Dashboard:** A clean, user-friendly Streamlit interface to visualize trends and manage alerts.
+## Kenyan defaults
 
----
+- Time zone: `Africa/Nairobi` (East Africa Time, UTC+3).
+- Example growing conditions: 22–26 °C and 80–90% humidity; confirm these with the farm agronomist.
+- Future Kenyan phone numbers should be configured in international E.164 format such as `+254…`; this prototype stores no phone numbers.
+- Future costs should be reviewed in Kenyan shillings (KES); no provider or cost is configured in this demo.
 
-## 🚀 How to Install and Run
+## Prototype API
 
-Follow these steps to run the system locally on your machine.
+- `GET /health` — confirms the local demo is running.
+- `GET /api/dashboard` — returns the synthetic demo view data.
+- `POST /api/simulate` — accepts `{"scenario":"normal"}`, `warm`, or `dry` to add a synthetic reading.
+- `POST /api/demo/reset` — resets the demo state.
+- `POST /api/predict` — returns 503 until a real model is available.
 
-### Prerequisites
-* Python 3.10 - 3.12 installed on your system.
-* A Firebase account with a Realtime Database created.
-* VS Code (or any preferred IDE).
-
-### 1. Clone the Repository
-```bash
-git clone https://github.com/your-username/mushroom-system.git
-cd mushroom-system
+More detail and limitations: `docs/PROTOTYPE.md`.

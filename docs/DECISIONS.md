@@ -21,3 +21,9 @@ The user authorized proceeding with all intake defaults. The non-secret assumpti
 - Do not include actual secret or personal contact values in this record.
 - The unpinned draft requirements installed successfully in the Python 3.11.9 Windows environment, including TensorFlow 2.21.0, Firebase Admin 7.8.0, Flask 3.1.3, NumPy 2.4.6, OpenCV 5.1.0, and Twilio 9.13.0. This is an observed local environment, not a dependency pin recommendation.
 - The TensorFlow download temporarily reduced free disk space. The install completed; pip's download cache was purged afterward, restoring about 2.8 GB free. The project `.venv` was retained.
+
+## Prototype scope (2026-11-21)
+
+The user narrowed the immediate deliverable to a Kenya-context prototype. Implement a loopback-only, in-memory demo with visibly synthetic readings and bag examples, Nairobi time, English/Kiswahili labels, and the brief's example cultivation thresholds. Real photo classification remains disabled until reviewed data and a real trained model exist. No service account, notification secret, phone number, or email address is needed or stored for this prototype.
+- The prototype was smoke-tested locally without external accounts: synthetic data is stored only in process memory and cleared on restart.
+- Five automated API checks passed. Ruff, Python compilation, Node syntax check, PowerShell syntax parse, and `pip check` passed. A manual local HTTP run returned health 200, dashboard 200, synthetic scenario 200, and the deliberate photo-model 503.
