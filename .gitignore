@@ -1,0 +1,36 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+serviceAccountKey.json
+backend/secrets/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Data, uploads, models, and generated outputs
+dataset/
+dataset_split/
+uploads/
+*.h5
+*.keras
+models/
+reports/
+
+# Logs and local runtime files
+*.log
+logs/
+*.pid
+
+# Editors and operating system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
